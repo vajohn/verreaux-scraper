@@ -33,24 +33,24 @@ export interface SeriesMetadata {
 export function parseSeriesPage(html: string, origin: string): { title: string; coverUrl: string; chapters: RawChapter[] } {
   const $ = cheerio.load(html);
 
-  // Title: try h1, then og:title
-  let title = $("h1").first().text().trim();
-  if (!title) title = $("meta[property='og:title']").attr("content")?.trim() ?? "";
+  // Title: prefer og:title. The page renders multiple <h1>s and the first one
+  // is typically the "Status" metadata label, not the series name.
+  let title = $("meta[property='og:title']").attr("content")?.trim() ?? "";
+  if (!title) title = $("h1").first().text().trim();
   if (!title) throw new HivetoonsParseError("parseSeriesPage: title not found");
-
-  // DEBUG: Log what we found
-  const h1Count = $("h1").length;
-  const ogTitleVal = $("meta[property='og:title']").attr("content");
-  console.error(`[DEBUG parseSeriesPage] h1=${h1Count} h1Text='${$("h1").first().text()}' ogTitle='${ogTitleVal}' final='${title}'`);
 
   // Cover: prefer og:image then obvious img.cover
   const coverUrl = $("meta[property='og:image']").attr("content")?.trim() ?? $("img.cover").attr("src")?.trim() ?? "";
 
-  // Chapters: look for anchors under common containers
+  // Chapters: look for anchors under common containers. Hivetoons uses
+  // hyphenated chapter slugs like `/series/<slug>/chapter-N`; older
+  // candidate patterns (`/chapter/`, `/ch-`) are kept as fallbacks for
+  // other themes.
   const chapters: RawChapter[] = [];
   const seen = new Set<number>();
 
   const candidateSelectors = [
+    "a[href*='/chapter-']",
     ".chapters a[href]",
     ".chapter-list a[href]",
     ".listing a[href]",
@@ -63,16 +63,16 @@ export function parseSeriesPage(html: string, origin: string): { title: string; 
     if (!href) return;
     const url = toAbsoluteUrl(href, origin);
     const text = $(el).text().trim();
-    const number = extractChapterNumber(text) || extractChapterNumberFromHref(href);
+    // Prefer the href-derived number — the link text can be anything
+    // ("Read Chapter 1", "Chapter 402\n8 days ago", etc.). Fall back to
+    // text parsing only when the href yields no usable number.
+    let number = extractChapterNumberFromHref(href);
+    if (isNaN(number)) number = extractChapterNumber(text);
     if (isNaN(number)) return;
     if (seen.has(number)) return;
     seen.add(number);
     chapters.push({ url, number, title: text || null });
   });
-
-  // DEBUG: Log chapter search results
-  const selectorResults = candidateSelectors.map(sel => `${sel}=${$(sel).length}`);
-  console.error(`[DEBUG parseSeriesPage] chapter search: ${selectorResults.join(' ')} -> found ${chapters.length} chapters`);
 
   return { title, coverUrl, chapters };
 }
