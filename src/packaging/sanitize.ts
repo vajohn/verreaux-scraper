@@ -140,11 +140,12 @@ export function formatPageFilename(
 // pickCoverFilename
 // ---------------------------------------------------------------------------
 
-/** MIME type → cover filename. Must match `/^cover\.(webp|jpg|jpeg|png)$/i`. */
+/** MIME type → cover filename. Must match `/^cover\.(webp|jpg|jpeg|png|svg)$/i`. */
 export function pickCoverFilename(
   mime: string,
-): "cover.webp" | "cover.jpg" | "cover.jpeg" | "cover.png" {
+): "cover.webp" | "cover.jpg" | "cover.jpeg" | "cover.png" | "cover.svg" {
   const m = mime.toLowerCase();
+  if (m.includes("svg")) return "cover.svg";
   if (m.includes("webp")) return "cover.webp";
   if (m.includes("jpeg")) return "cover.jpeg";
   if (m.includes("jpg")) return "cover.jpg";

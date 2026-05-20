@@ -50,10 +50,10 @@ export class UnsupportedImageFormatError extends Error {
  * Detects image format from the first bytes of a buffer and returns the
  * canonical extension (with leading dot).
  *
- * Supported: PNG, JPEG, WebP.
- * Rejected with `UnsupportedImageFormatError`: GIF, BMP, SVG (and anything else).
+ * Supported: PNG, JPEG, WebP, SVG.
+ * Rejected with `UnsupportedImageFormatError`: GIF, BMP (and anything else).
  */
-export function detectImageExt(buf: Buffer): ".png" | ".jpg" | ".webp" {
+export function detectImageExt(buf: Buffer): ".png" | ".jpg" | ".webp" | ".svg" {
   if (buf.length < 3) {
     throw new UnsupportedImageFormatError(
       "unknown",
@@ -108,17 +108,12 @@ export function detectImageExt(buf: Buffer): ".png" | ".jpg" | ".webp" {
     return ".webp";
   }
 
-  // SVG: check for '<svg' or '<?xml' near the start (text-based)
+  // SVG: check for '<svg' near the start (text-based). Accept when the
+  // marker appears anywhere in the first 256 bytes — that covers files that
+  // open with `<?xml ...?>`, an XML doctype, or whitespace before the root.
   const prefix = buf.slice(0, 256).toString("utf8");
-  if (
-    prefix.includes("<svg") ||
-    prefix.includes("<?xml") ||
-    prefix.includes("<!DOCTYPE svg")
-  ) {
-    throw new UnsupportedImageFormatError(
-      "svg",
-      "SVG images are not accepted; rasterize to PNG or WebP first",
-    );
+  if (prefix.includes("<svg")) {
+    return ".svg";
   }
 
   throw new UnsupportedImageFormatError(

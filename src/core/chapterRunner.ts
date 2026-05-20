@@ -210,7 +210,7 @@ export async function runChapter(args: ChapterRunnerArgs): Promise<ChapterRunner
     if (completedPageNums.has(stub.pageIndex)) {
       const existing = existingPages.find((p) => p.page_index === stub.pageIndex);
       if (existing && existing.sha1 && existing.bytes) {
-        results.push({ pageNumber: stub.pageIndex, result: { sha1: existing.sha1, byteLength: existing.bytes, ext: (existing.ext ?? ".jpg") as ".webp" | ".jpg" | ".jpeg" | ".png" } });
+        results.push({ pageNumber: stub.pageIndex, result: { sha1: existing.sha1, byteLength: existing.bytes, ext: (existing.ext ?? ".jpg") as ".webp" | ".jpg" | ".jpeg" | ".png" | ".svg" } });
         totalBytes += existing.bytes;
         continue;
       }

@@ -26,7 +26,7 @@ export const enum ExitCode {
 // Image / media
 // ---------------------------------------------------------------------------
 
-export type ImgExt = ".webp" | ".jpg" | ".jpeg" | ".png";
+export type ImgExt = ".webp" | ".jpg" | ".jpeg" | ".png" | ".svg";
 
 export interface ImageHash {
   readonly sha1: string;

@@ -13,7 +13,7 @@ interface NormalizedImageResponse {
   body: Buffer;
 }
 
-export type ImageExt = ".webp" | ".jpg" | ".jpeg" | ".png";
+export type ImageExt = ".webp" | ".jpg" | ".jpeg" | ".png" | ".svg";
 
 export class InvalidImageFormatError extends Error {
   override readonly name = "InvalidImageFormatError";

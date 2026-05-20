@@ -70,10 +70,10 @@ export interface PackagerBuildResult {
 // Packager
 // ---------------------------------------------------------------------------
 
-/** Cover file extensions that benefit from DEFLATE (PNG). */
-const DEFLATE_COVER_EXTS = new Set([".png"]);
+/** Cover file extensions that benefit from DEFLATE (text/lossless). */
+const DEFLATE_COVER_EXTS = new Set([".png", ".svg"]);
 
-const IMAGE_EXTS = new Set([".webp", ".jpg", ".jpeg", ".png"]);
+const IMAGE_EXTS = new Set([".webp", ".jpg", ".jpeg", ".png", ".svg"]);
 
 export class Packager {
   constructor(private readonly bus: EventBus) {}

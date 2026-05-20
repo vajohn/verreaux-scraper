@@ -120,9 +120,15 @@ describe("detectImageExt", () => {
     expect(() => detectImageExt(makeBmp())).toThrow(/BMP/i);
   });
 
-  it("rejects SVG with UnsupportedImageFormatError", () => {
-    expect(() => detectImageExt(makeSvg())).toThrow(UnsupportedImageFormatError);
-    expect(() => detectImageExt(makeSvg())).toThrow(/SVG/i);
+  it("accepts SVG and returns .svg", () => {
+    expect(detectImageExt(makeSvg())).toBe(".svg");
+  });
+
+  it("accepts SVG even when prefixed with an XML declaration", () => {
+    const xmlSvg = Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"></svg>',
+    );
+    expect(detectImageExt(xmlSvg)).toBe(".svg");
   });
 
   it("rejects a too-small buffer", () => {
@@ -265,12 +271,11 @@ describe("StagingDir", () => {
   // Atomic rename behaviour
   // -------------------------------------------------------------------------
 
-  it("writePage() does not leave partial file when fs.rename is mocked to fail", async () => {
-    // Simulate a failure mid-write: write will succeed to partial but rename throws.
-    // We intercept by writing a bad buffer that will cause detectImageExt to throw BEFORE
-    // any file is written. This tests that the pre-condition check prevents littering.
-    const svgBuf = makeSvg();
-    await expect(staging.writePage(1, 1, svgBuf, "image/svg+xml")).rejects.toThrow(
+  it("writePage() does not leave partial file when detect rejects the buffer", async () => {
+    // Use a too-small buffer so detectImageExt throws before any file is
+    // written. This proves the pre-condition check prevents littering.
+    const tinyBuf = Buffer.alloc(2);
+    await expect(staging.writePage(1, 1, tinyBuf, "image/png")).rejects.toThrow(
       UnsupportedImageFormatError,
     );
 

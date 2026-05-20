@@ -198,17 +198,22 @@ describe("pickCoverFilename", () => {
     expect(pickCoverFilename("image/png")).toBe("cover.png");
   });
 
+  it("maps image/svg+xml → cover.svg", () => {
+    expect(pickCoverFilename("image/svg+xml")).toBe("cover.svg");
+  });
+
   it("falls back to cover.png for unknown mime", () => {
     expect(pickCoverFilename("application/octet-stream")).toBe("cover.png");
   });
 
   it("result always matches the importer COVER_RE", () => {
-    const COVER_RE = /^cover\.(webp|jpg|jpeg|png)$/i;
+    const COVER_RE = /^cover\.(webp|jpg|jpeg|png|svg)$/i;
     const mimes = [
       "image/webp",
       "image/jpeg",
       "image/jpg",
       "image/png",
+      "image/svg+xml",
       "application/octet-stream",
     ];
     for (const mime of mimes) {
