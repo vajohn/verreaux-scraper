@@ -14,3 +14,5 @@ yarn-error.log*
 Thumbs.db
 *.tsbuildinfo
 coverage/
+.idea/
+test/fixtures/**/*.real.html

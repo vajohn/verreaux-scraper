@@ -204,7 +204,7 @@ export interface GroupInfo {
 // ---------------------------------------------------------------------------
 
 export interface SourceAdapter {
-  readonly id: "asurascans" | "manhuaplus" | "arenascan" | "drake";
+  readonly id: "asurascans" | "manhuaplus" | "arenascan" | "drake" | "hivetoons";
 
   matchHost(host: string): boolean;
 

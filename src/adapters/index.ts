@@ -10,6 +10,7 @@ import { AsuraScansAdapter } from "./asurascans.js";
 import { manhuaPlusAdapter } from "./manhuaplus.js";
 import { arenascanAdapter } from "./arenascan.js";
 import { drakeAdapter } from "./drake.js";
+import { hivetoonsAdapter } from "./hivetoons.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -81,6 +82,7 @@ export const adapterRegistry: AdapterRegistry = new AdapterRegistryImpl([
   manhuaPlusAdapter,
   arenascanAdapter,
   drakeAdapter,
+  hivetoonsAdapter,
 ]);
 
 // Re-export adapter classes for consumers.
