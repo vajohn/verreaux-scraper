@@ -24,6 +24,8 @@ import { createWriteStream, rename as renameSync } from "node:fs";
 import { join, basename } from "node:path";
 import { promisify } from "node:util";
 
+import sharp from "sharp";
+
 import {
   formatChapterFolder,
   formatPageFilename,
@@ -195,11 +197,18 @@ export class StagingDir {
     const chapterDir = join(this.rootPath, formatChapterFolder(chapterOrder));
     await mkdir(chapterDir, { recursive: true });
 
+    // Some sources (e.g. hivetoons) ship pages with an alpha channel whose
+    // intended backdrop is white. The PWA reader renders pages on a charcoal
+    // background, so transparency would show through as black. Bake white
+    // into the pixels here so it survives ZIP → IndexedDB → <img> unchanged.
+    // Raw bytes pass through unchanged when there is no alpha to flatten.
+    const finalBuffer = await flattenAlphaIfPresent(buffer, ext);
+
     const filename = formatPageFilename(pageNumber, ext);
     const finalPath = join(chapterDir, filename);
     const partialPath = join(chapterDir, `${filename}.partial`);
 
-    await atomicWrite(partialPath, finalPath, buffer);
+    await atomicWrite(partialPath, finalPath, finalBuffer);
     return finalPath;
   }
 
@@ -234,6 +243,41 @@ export class StagingDir {
     // Natural sort: parse the leading number (same as extractSortKey)
     chapterDirs.sort((a, b) => extractSortKey(a) - extractSortKey(b));
     return chapterDirs;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Alpha flattening
+// ---------------------------------------------------------------------------
+
+/**
+ * If the buffer contains an alpha channel, composite onto white and re-encode
+ * in the same raster format. Otherwise return the buffer untouched so the
+ * original bytes ship through. SVGs are left alone — they are vector and the
+ * PWA renders them without compositing against the page background.
+ */
+async function flattenAlphaIfPresent(
+  buffer: Buffer,
+  ext: ".png" | ".jpg" | ".webp" | ".svg",
+): Promise<Buffer> {
+  if (ext === ".jpg" || ext === ".svg") return buffer;
+
+  try {
+    const img = sharp(buffer, { animated: false });
+    const meta = await img.metadata();
+    if (!meta.hasAlpha) return buffer;
+
+    const flattened = img.flatten({ background: { r: 255, g: 255, b: 255 } });
+    if (ext === ".webp") {
+      return await flattened.webp({ quality: 90, effort: 4 }).toBuffer();
+    }
+    return await flattened.png({ compressionLevel: 9 }).toBuffer();
+  } catch {
+    // Image bytes pass magic-byte detection but sharp can't decode them
+    // (truncated, malformed IDAT, unsupported chunk, etc). Fall back to the
+    // raw buffer — preserves prior behaviour and lets downstream tools see
+    // exactly what the source served.
+    return buffer;
   }
 }
 
