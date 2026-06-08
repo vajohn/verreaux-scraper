@@ -44,6 +44,7 @@
 - `scripts/totp.mjs` — RFC 6238 TOTP validator (gate for the scrape workflow) + `test/totp.test.ts`.
 - `scripts/scrape-remote.mjs` — local wrapper: prompt code → dispatch workflow → download ZIP to `./output`.
 - `.github/workflows/scrape.yml` — run the scraper CLI on a GitHub runner, TOTP-gated.
+- `.github/CODEOWNERS` — require owner review for the workflow + TOTP validator (Task 10).
 
 **Modify:**
 - `src/core/types.ts` — extend the `SourceAdapter["id"]` union.
@@ -1158,10 +1159,12 @@ git commit -m "feat(qimanhwa): add adapter (ng-state via headless render) and re
 collaborators with **write** access + a valid token (the public can read code but
 cannot run Actions). We add a **TOTP second factor**, validated **server-side as
 the first workflow step**, so that even a leaked token cannot launch a scrape
-without the rotating 6-digit code from an authenticator app. (Limitation: a
-malicious write-collaborator could edit the workflow to bypass the check — TOTP
-defends against leaked tokens / casual abuse, not trusted insiders. Pair with
-branch protection on `.github/workflows/` for that.)
+without the rotating 6-digit code from an authenticator app. The TOTP secret is
+stored as an **environment** secret restricted to `main` (Step 5), and the
+workflow file is protected by branch protection + CODEOWNERS (Task 10) — together
+these stop the "push a modified workflow on a feature branch and dispatch it"
+bypass, because the secret is unavailable to runs off `main` and the gate can't be
+edited without a code-owner-reviewed PR.
 
 **Files:**
 - Create: `scripts/totp.mjs` (RFC 6238 TOTP, no external deps — Node `crypto`)
@@ -1303,10 +1306,15 @@ This prints a `secret:` line and an `otpauth://` URI. Do two things with it:
 1. Add it to your authenticator app (Google Authenticator / Authy): either paste the
    `secret` as a manual "time-based" key, or turn the `otpauth://` URI into a QR
    (any offline QR generator) and scan it.
-2. Store the secret as a GitHub Actions repo secret (requires repo admin):
+2. Store the secret as a GitHub **environment** secret scoped to the `production`
+   environment (created/locked to `main` in Task 10), so workflow runs off `main`
+   cannot read it (requires repo admin):
 
 ```bash
-gh secret set SCRAPE_TOTP_SECRET --body "<paste-the-secret-from-step-above>"
+# Create the environment if it does not exist yet (idempotent):
+gh api -X PUT repos/vajohn/verreaux-scraper/environments/production >/dev/null
+# Store the TOTP secret in that environment (NOT as a repo-wide secret):
+gh secret set SCRAPE_TOTP_SECRET --env production --body "<paste-the-secret-from-step-above>"
 ```
 
 Verify the app and the secret agree: `SCRAPE_TOTP_SECRET="<secret>" node scripts/totp.mjs now` should print the same 6 digits your app shows.
@@ -1368,6 +1376,9 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # Binds the job to the `production` environment so SCRAPE_TOTP_SECRET (an
+    # environment secret locked to `main`, see Task 10) is only available here.
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - name: Validate authenticator code (gate)
@@ -1561,7 +1572,106 @@ git commit -m "feat(ci): add local wrapper to run + download TOTP-gated remote s
 
 ---
 
-## Task 10: Final verification
+## Task 10: Repo hardening — branch protection + CODEOWNERS
+
+**Why:** Makes the TOTP gate tamper-resistant on a public repo. Three controls,
+each closing a specific hole:
+1. **CODEOWNERS** — changes to the gate (`.github/workflows/`, `scripts/totp.mjs`)
+   require the owner's review.
+2. **Branch protection on `main`** — no direct pushes/force-pushes; changes land
+   only via code-owner-reviewed PRs with the test check green. Protects the
+   workflow + validator from being edited around.
+3. **Environment branch policy** — `SCRAPE_TOTP_SECRET` lives in the `production`
+   environment locked to `main`, so a workflow pushed on a feature branch and
+   dispatched cannot read the secret (nor exfiltrate it), and the gate it would
+   skip has nothing to skip to.
+
+**Files:**
+- Create: `.github/CODEOWNERS`
+
+> Note: branch protection and environment policies are configured on GitHub via
+> `gh api`, not in the repo. These commands require repo **admin**. Replace the
+> owner handle if the repo moves. They are idempotent enough to re-run.
+
+- [ ] **Step 1: Add CODEOWNERS**
+
+Create `.github/CODEOWNERS`:
+
+```
+# Security-sensitive paths require the repo owner's review.
+/.github/        @vajohn
+/scripts/totp.mjs @vajohn
+```
+
+Commit it:
+
+```bash
+git add .github/CODEOWNERS
+git commit -m "chore: add CODEOWNERS for the scrape gate"
+```
+
+- [ ] **Step 2: Lock the `production` environment to `main`**
+
+This ensures the environment secret is only available to runs on `main`:
+
+```bash
+gh api -X PUT repos/vajohn/verreaux-scraper/environments/production \
+  -F "deployment_branch_policy[protected_branches]=false" \
+  -F "deployment_branch_policy[custom_branch_policies]=true" >/dev/null
+gh api -X POST repos/vajohn/verreaux-scraper/environments/production/deployment-branch-policies \
+  -f name=main >/dev/null
+```
+
+Expected: no error. Verify only `main` is allowed:
+
+```bash
+gh api repos/vajohn/verreaux-scraper/environments/production/deployment-branch-policies --jq '.branch_policies[].name'
+```
+Expected output: `main`.
+
+- [ ] **Step 3: Enable branch protection on `main`**
+
+```bash
+gh api -X PUT repos/vajohn/verreaux-scraper/branches/main/protection \
+  --input - <<'JSON'
+{
+  "required_status_checks": { "strict": true, "contexts": [] },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "require_code_owner_reviews": true,
+    "dismiss_stale_reviews": true
+  },
+  "restrictions": null,
+  "required_linear_history": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+```
+
+Expected: a JSON object describing the protection (HTTP 200). Notes:
+- `"contexts": []` means "require checks to be up to date" without pinning a
+  specific check name yet; after the first CI run you can add the test job's check
+  name to make a green test suite mandatory before merge.
+- `enforce_admins: true` means even the owner merges via PR. If that is too strict
+  for a solo maintainer, set it to `false` — but then an admin token can bypass the
+  gate, so prefer `true`.
+
+- [ ] **Step 4: Verify protection is active**
+
+```bash
+gh api repos/vajohn/verreaux-scraper/branches/main/protection --jq '{admins: .enforce_admins.enabled, codeowners: .required_pull_request_reviews.require_code_owner_reviews, force: .allow_force_pushes.enabled}'
+```
+Expected: `{"admins":true,"codeowners":true,"force":false}`.
+
+> Consequence for this plan: once `main` is protected, the feature branch
+> `feat/manhwanex-qimanhwa-adapters` must be merged via a PR (Task 11 Step 3),
+> not pushed straight to `main`.
+
+---
+
+## Task 11: Final verification
 
 - [ ] **Step 1: Full gate**
 
@@ -1573,16 +1683,25 @@ Expected: lint clean, typecheck clean, all tests pass (includes the new TOTP tes
 Run: `npm run build`
 Expected: builds without error.
 
-- [ ] **Step 3: Push the branch**
+- [ ] **Step 3: Push the branch and open a PR (main is protected)**
+
+Since Task 10 protects `main`, merge via a code-owner-reviewed PR rather than
+pushing to `main` directly:
 
 ```bash
 git push -u origin feat/manhwanex-qimanhwa-adapters
+gh pr create --base main --head feat/manhwanex-qimanhwa-adapters \
+  --title "feat: manhwanex + qimanhwa adapters, TOTP-gated remote scrape" \
+  --body "Implements docs/superpowers/plans/2026-06-08-manhwanex-qimanhwa-adapters.md"
+# After review + green checks:
+gh pr merge --squash --delete-branch
 ```
 
 - [ ] **Step 4 (live, end-to-end): qimanhwa via the wrapper**
 
-After the branch is merged to `main` (the workflow must exist on `main` to be
-dispatchable) and `SCRAPE_TOTP_SECRET` is set (Task 7 Step 5):
+After the PR is merged to `main` (the workflow must exist on `main` to be
+dispatchable, and the `production` environment secret is only readable there) and
+`SCRAPE_TOTP_SECRET` is set (Task 7 Step 5):
 
 ```bash
 node scripts/scrape-remote.mjs https://qimanhwa.com/series/office-worker-who-sees-fate -- --from 1 --to 2
