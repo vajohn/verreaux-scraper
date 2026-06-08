@@ -276,3 +276,64 @@ jobs:
           path: capture/*.html
           if-no-files-found: ignore
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 4 — API probe. Confirms qimanhwa's /api/v1 is usable once Cloudflare is
+  # cleared, and dumps the chapter-list + single-chapter JSON so we know the
+  # exact data model for an API-first adapter.
+  # ---------------------------------------------------------------------------
+  api-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright + stealth
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install playwright-extra puppeteer-extra-plugin-stealth playwright >/dev/null 2>&1
+          npx playwright install --with-deps chromium
+      - name: Fetch /api/v1 endpoints from a CF-cleared context
+        run: |
+          mkdir -p api
+          cat > api.mjs <<'JS'
+          import { addExtra } from 'playwright-extra';
+          import { chromium as base } from 'playwright';
+          import Stealth from 'puppeteer-extra-plugin-stealth';
+          import fs from 'node:fs';
+          const chromium = addExtra(base); chromium.use(Stealth());
+          const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+          const browser = await chromium.launch({ headless:true });
+          const ctx = await browser.newContext({ userAgent:UA });
+          const page = await ctx.newPage();
+          // Clear CF by loading the SPA origin first.
+          await page.goto('https://qimanhwa.com/', { waitUntil:'domcontentloaded', timeout:45000 });
+          await page.waitForTimeout(6000);
+          const SLUG='office-worker-who-sees-fate';
+          const endpoints = {
+            series:   `https://qimanhwa.com/api/v1/series/${SLUG}`,
+            chapters: `https://qimanhwa.com/api/v1/series/${SLUG}/chapters`,
+            chapter0: `https://qimanhwa.com/api/v1/series/${SLUG}/chapters/chapter-0`,
+          };
+          for (const [name,url] of Object.entries(endpoints)) {
+            const r = await page.evaluate(async (u) => {
+              try { const res = await fetch(u, { headers:{accept:'application/json'} });
+                const txt = await res.text(); return { status:res.status, ct:res.headers.get('content-type'), txt }; }
+              catch(e){ return { status:'ERR', txt:String(e) }; }
+            }, url);
+            console.log(`\n[${name}] ${url}\n  status=${r.status} content-type=${r.ct}`);
+            console.log('  body (first 700 chars):', (r.txt||'').slice(0,700).replace(/\n/g,' '));
+            fs.writeFileSync(`api/${name}.json`, r.txt||'');
+          }
+          await browser.close(); process.exit(0);
+          JS
+          node api.mjs
+      - name: Upload API JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qimanhwa-api-json
+          path: api/*.json
+          if-no-files-found: ignore
+          retention-days: 7
