@@ -2,7 +2,8 @@
 // adapters/index.ts — Adapter registry.
 //
 // Routes URLs to their SourceAdapter implementation.
-// AsuraScans, ManhuaPlus, Arenascan, and Drake adapters are registered.
+// AsuraScans, ManhuaPlus, Arenascan, Drake, Hivetoons, and Manhwanex adapters
+// are registered.
 // ---------------------------------------------------------------------------
 
 import type { SourceAdapter } from "../core/types.js";
@@ -11,6 +12,7 @@ import { manhuaPlusAdapter } from "./manhuaplus.js";
 import { arenascanAdapter } from "./arenascan.js";
 import { drakeAdapter } from "./drake.js";
 import { hivetoonsAdapter } from "./hivetoons.js";
+import { manhwanexAdapter } from "./manhwanex.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -83,6 +85,7 @@ export const adapterRegistry: AdapterRegistry = new AdapterRegistryImpl([
   arenascanAdapter,
   drakeAdapter,
   hivetoonsAdapter,
+  manhwanexAdapter,
 ]);
 
 // Re-export adapter classes for consumers.

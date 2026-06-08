@@ -3,8 +3,8 @@
 //
 // Side-effect-free; cheerio only. manhwanex serves a standard Madara/wp-manga
 // WordPress theme over LiteSpeed (no Cloudflare):
-//   - Series page server-renders the chapter list under .wp-manga-chapter.
-//   - Reader page renders pages under .reading-content img (lazy via data-src).
+//   - Chapter list comes from the modern Madara endpoint POST {seriesUrl}ajax/chapters/.
+//   - Reader page renders pages under .reading-content img (plain src; may have leading space).
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
