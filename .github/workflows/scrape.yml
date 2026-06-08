@@ -43,7 +43,7 @@ jobs:
           node scripts/totp.mjs verify "$OTP" || { echo "::error::Invalid authenticator code"; exit 1; }
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
