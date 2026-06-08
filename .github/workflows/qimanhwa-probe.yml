@@ -1,0 +1,160 @@
+name: qimanhwa-probe
+
+# Manual-only diagnostic. Answers one question: when the request originates from
+# a GitHub-hosted (Azure datacenter) IP instead of the Zscaler-filtered corporate
+# network, does qimanhwa.com let us through, or does its Cloudflare challenge/block
+# the datacenter IP?
+#
+# Zscaler is irrelevant here (GitHub runners are off the corporate network), so a
+# non-200 result means Cloudflare, not Katim's AUP. manhwanex.com is the control:
+# it has no Cloudflare and should always be 200.
+#
+# Run from the Actions tab → "qimanhwa-probe" → "Run workflow".
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — curl probe. Fast verdict on Cloudflare's posture toward GitHub IPs.
+  # ---------------------------------------------------------------------------
+  curl-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show runner egress IP (the IP Cloudflare sees)
+        run: |
+          echo "Runner public IP:"
+          curl -s --max-time 15 https://api.ipify.org || echo "(could not determine)"
+          echo
+
+      - name: Probe sites (default UA + browser UA)
+        run: |
+          BROWSER_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+          probe() {
+            local label="$1" url="$2" ua="$3"
+            echo "==================================================================="
+            echo "[$label] GET $url"
+            echo "  UA: ${ua:0:40}..."
+            local body="/tmp/${label}.html"
+            # -s silent, -S show errors, follow no redirects so we see CF's own response
+            local code
+            code=$(curl -sS -o "$body" --max-time 30 \
+                     -H "User-Agent: $ua" \
+                     -H "Accept: text/html,application/xhtml+xml" \
+                     -w "%{http_code}" "$url" 2>/tmp/err."$label" || echo "000")
+            local size; size=$(wc -c < "$body" 2>/dev/null | tr -d ' ')
+            echo "  status=$code  body_bytes=${size:-0}"
+
+            echo "  --- response headers ---"
+            curl -sS -I --max-time 30 -H "User-Agent: $ua" "$url" 2>/dev/null \
+              | grep -iE "^HTTP|server:|cf-ray:|cf-mitigated:|cf-cache-status:|cf-chl|retry-after:|via:|content-type:" \
+              | sed 's/^/    /' || true
+
+            echo "  --- classification ---"
+            if [ "$code" = "000" ]; then
+              echo "    >> UNREACHABLE (connection failed/timed out)"; cat /tmp/err."$label" | sed 's/^/       /'
+            elif grep -qiE "just a moment|cf-chl|challenge-platform|turnstile|cf_chl_opt|_cf_chl" "$body" 2>/dev/null; then
+              echo "    >> CLOUDFLARE CHALLENGE (interstitial page; needs JS/Turnstile solve)"
+            elif [ "$code" = "403" ] && curl -sS -I --max-time 15 -H "User-Agent: $ua" "$url" 2>/dev/null | grep -qi "server: *cloudflare"; then
+              echo "    >> CLOUDFLARE HARD BLOCK (403 from Cloudflare edge)"
+            elif [ "$code" = "503" ] || [ "$code" = "429" ]; then
+              echo "    >> CLOUDFLARE RATE-LIMIT / UNDER-ATTACK ($code)"
+            elif [ "$code" = "200" ]; then
+              echo "    >> OK (200 — datacenter IP allowed through)"
+            else
+              echo "    >> OTHER ($code) — inspect manually"
+            fi
+            echo
+          }
+
+          # qimanhwa: the real question (Cloudflare-fronted SPA)
+          probe "qimanhwa-default-ua" "https://qimanhwa.com/" "curl/$(curl --version | head -1 | awk '{print $2}')"
+          probe "qimanhwa-browser-ua" "https://qimanhwa.com/" "$BROWSER_UA"
+
+          # manhwanex: control (no Cloudflare; must be 200)
+          probe "manhwanex-control"   "https://manhwanex.com/" "$BROWSER_UA"
+
+      - name: Upload captured bodies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: curl-probe-bodies
+          path: /tmp/*.html
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — headless browser probe. The realistic "can we actually scrape it?"
+  # test: does a headless Chromium (with stealth) get past Cloudflare and render
+  # qimanhwa's React SPA enough to expose its title / content?
+  # ---------------------------------------------------------------------------
+  headless-browser-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright + stealth
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install playwright-extra puppeteer-extra-plugin-stealth playwright >/dev/null 2>&1
+          npx playwright install --with-deps chromium
+
+      - name: Render qimanhwa.com headless and report outcome
+        run: |
+          cat > probe.mjs <<'JS'
+          import { addExtra } from 'playwright-extra';
+          import { chromium as base } from 'playwright';
+          import Stealth from 'puppeteer-extra-plugin-stealth';
+
+          const chromium = addExtra(base);
+          chromium.use(Stealth());
+
+          const URL = 'https://qimanhwa.com/';
+          const browser = await chromium.launch({ headless: true });
+          const ctx = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            viewport: { width: 1280, height: 800 },
+          });
+          const page = await ctx.newPage();
+          let status = 'n/a';
+          try {
+            const resp = await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            status = resp ? resp.status() : 'no-response';
+            // Give the SPA a moment to hydrate / CF a moment to clear.
+            await page.waitForTimeout(8000);
+            const title = await page.title();
+            const bodyText = (await page.evaluate(() => document.body?.innerText || '')).slice(0, 300);
+            const isChallenge = /just a moment|verify you are human|cf-chl|challenge/i.test(title + ' ' + bodyText);
+            await page.screenshot({ path: 'qimanhwa-headless.png', fullPage: false });
+
+            console.log('HTTP status   :', status);
+            console.log('Page title    :', JSON.stringify(title));
+            console.log('Body excerpt  :', JSON.stringify(bodyText));
+            console.log('Verdict       :',
+              isChallenge ? 'BLOCKED — Cloudflare challenge not cleared headless'
+              : /qi manhwa|manhwa/i.test(title) ? 'SUCCESS — real qimanhwa content rendered'
+              : 'INCONCLUSIVE — no challenge, but title not recognized (inspect screenshot)');
+          } catch (err) {
+            console.log('HTTP status   :', status);
+            console.log('Verdict       : ERROR —', err.message);
+          } finally {
+            await browser.close();
+          }
+          JS
+          node probe.mjs
+
+      - name: Upload headless screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qimanhwa-headless-screenshot
+          path: qimanhwa-headless.png
+          if-no-files-found: ignore
+          retention-days: 7
