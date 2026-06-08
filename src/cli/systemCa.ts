@@ -1,5 +1,12 @@
 import { readFileSync, existsSync } from "node:fs";
-import { rootCertificates, setDefaultCACertificates } from "node:tls";
+import * as nodeTls from "node:tls";
+
+// `tls.setDefaultCACertificates` only exists on Node >= 22.15. Access it through
+// the namespace (not a named import) so that on older Node it is `undefined` and
+// handled by the runtime guard below — a static named import of a missing export
+// is an ESM SyntaxError that would crash the whole CLI at load.
+const { rootCertificates } = nodeTls;
+const setDefaultCACertificates = nodeTls.setDefaultCACertificates;
 
 const CANDIDATE_BUNDLES = [
   "/etc/ssl/cert.pem",
