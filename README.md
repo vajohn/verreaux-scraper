@@ -219,6 +219,10 @@ TOTP-gated GitHub Actions workflow using the local wrapper:
 
     node scripts/scrape-remote.mjs https://qimanhwa.com/series/<slug> -- --from 1 --to 10
 
+After `npm link` (or a global install) the same wrapper is available as a command:
+
+    verreaux-scrape-remote https://qimanhwa.com/series/<slug> -- --from 1 --to 10
+
 You'll be prompted for your authenticator code; the wrapper dispatches the remote
 run, waits, and downloads the resulting ZIP(s) into ./output — so it feels like a
 local download even though the work runs on GitHub. Output ZIPs are also kept as a
