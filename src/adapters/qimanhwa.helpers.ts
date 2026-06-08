@@ -57,7 +57,7 @@ export function findCachedBodyByUrlSuffix(state: NgStateMap, suffix: string): un
   for (const key of Object.keys(state)) {
     const entry = state[key];
     if (entry && typeof entry === "object" && typeof entry.u === "string") {
-      const path = entry.u.split("?")[0]!;
+      const path = entry.u.split("?")[0]!.replace(/\/$/, "");
       if (path.endsWith(suffix)) return entry.b;
     }
   }

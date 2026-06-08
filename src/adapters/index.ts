@@ -13,6 +13,7 @@ import { arenascanAdapter } from "./arenascan.js";
 import { drakeAdapter } from "./drake.js";
 import { hivetoonsAdapter } from "./hivetoons.js";
 import { manhwanexAdapter } from "./manhwanex.js";
+import { qimanhwaAdapter } from "./qimanhwa.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -86,6 +87,7 @@ export const adapterRegistry: AdapterRegistry = new AdapterRegistryImpl([
   drakeAdapter,
   hivetoonsAdapter,
   manhwanexAdapter,
+  qimanhwaAdapter,
 ]);
 
 // Re-export adapter classes for consumers.
