@@ -41,7 +41,9 @@
 - `test/qimanhwa.helpers.test.ts`, `test/qimanhwa.adapter.test.ts`
 - `test/fixtures/manhwanex/series.html`, `test/fixtures/manhwanex/chapter.html`
 - `test/fixtures/qimanhwa/series.html`, `test/fixtures/qimanhwa/chapter.html`
-- `.github/workflows/scrape.yml` — run the scraper CLI on a GitHub runner.
+- `scripts/totp.mjs` — RFC 6238 TOTP validator (gate for the scrape workflow) + `test/totp.test.ts`.
+- `scripts/scrape-remote.mjs` — local wrapper: prompt code → dispatch workflow → download ZIP to `./output`.
+- `.github/workflows/scrape.yml` — run the scraper CLI on a GitHub runner, TOTP-gated.
 
 **Modify:**
 - `src/core/types.ts` — extend the `SourceAdapter["id"]` union.
@@ -1150,20 +1152,187 @@ git commit -m "feat(qimanhwa): add adapter (ng-state via headless render) and re
 
 ---
 
-## Task 7: GitHub-Actions scrape workflow + README
+## Task 7: Authenticator (TOTP) gate — validator script + secret setup
+
+**Why:** The repo is public. `workflow_dispatch` already restricts triggering to
+collaborators with **write** access + a valid token (the public can read code but
+cannot run Actions). We add a **TOTP second factor**, validated **server-side as
+the first workflow step**, so that even a leaked token cannot launch a scrape
+without the rotating 6-digit code from an authenticator app. (Limitation: a
+malicious write-collaborator could edit the workflow to bypass the check — TOTP
+defends against leaked tokens / casual abuse, not trusted insiders. Pair with
+branch protection on `.github/workflows/` for that.)
+
+**Files:**
+- Create: `scripts/totp.mjs` (RFC 6238 TOTP, no external deps — Node `crypto`)
+- Test: `test/totp.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `test/totp.test.ts`:
+
+```typescript
+import { describe, it, expect } from "vitest";
+// RFC 6238 reference: ASCII secret "12345678901234567890" in base32.
+import { totp, verifyTotp } from "../scripts/totp.mjs";
+
+const SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+describe("totp (RFC 6238 SHA-1, 6 digits)", () => {
+  it("matches the RFC 6238 test vector at T=59s", () => {
+    expect(totp(SECRET, 59_000)).toBe("287082");
+  });
+  it("verifyTotp accepts the correct code and rejects a wrong one", () => {
+    expect(verifyTotp(SECRET, "287082", 59_000)).toBe(true);
+    expect(verifyTotp(SECRET, "000000", 59_000)).toBe(false);
+  });
+  it("verifyTotp tolerates +/- one 30s step of clock drift", () => {
+    // 287082 is valid for the window containing T=59s; still accepted 25s later.
+    expect(verifyTotp(SECRET, "287082", 84_000)).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npx vitest run test/totp.test.ts`
+Expected: FAIL — `scripts/totp.mjs` not found.
+
+- [ ] **Step 3: Implement the validator**
+
+Create `scripts/totp.mjs`:
+
+```javascript
+// ---------------------------------------------------------------------------
+// totp.mjs — RFC 6238 TOTP (HMAC-SHA1, 30s step, 6 digits). No external deps.
+//
+// Library exports: totp(secretBase32, atMs?), verifyTotp(secretBase32, code, atMs?).
+// CLI:
+//   node scripts/totp.mjs gen            -> print a fresh secret + otpauth URI
+//   node scripts/totp.mjs now            -> print current code (reads SCRAPE_TOTP_SECRET)
+//   node scripts/totp.mjs verify <code>  -> exit 0 if valid else 1 (reads SCRAPE_TOTP_SECRET)
+// ---------------------------------------------------------------------------
+
+import crypto from "node:crypto";
+
+const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function base32Decode(s) {
+  let bits = 0, value = 0;
+  const out = [];
+  for (const c of s.replace(/=+$/, "").toUpperCase().replace(/\s/g, "")) {
+    const idx = B32.indexOf(c);
+    if (idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+
+export function totp(secretBase32, atMs = Date.now(), step = 30, digits = 6) {
+  const key = base32Decode(secretBase32);
+  let counter = Math.floor(atMs / 1000 / step);
+  const buf = Buffer.alloc(8);
+  for (let i = 7; i >= 0; i--) { buf[i] = counter & 0xff; counter = Math.floor(counter / 256); }
+  const hmac = crypto.createHmac("sha1", key).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const code =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return (code % 10 ** digits).toString().padStart(digits, "0");
+}
+
+export function verifyTotp(secretBase32, code, atMs = Date.now()) {
+  const c = String(code).trim();
+  for (const drift of [-1, 0, 1]) {
+    if (totp(secretBase32, atMs + drift * 30_000) === c) return true;
+  }
+  return false;
+}
+
+function genSecret() {
+  const bytes = crypto.randomBytes(20);
+  let bits = 0, value = 0, s = "";
+  for (const x of bytes) {
+    value = (value << 8) | x; bits += 8;
+    while (bits >= 5) { s += B32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  return s;
+}
+
+// CLI entrypoint
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const [, , cmd, arg] = process.argv;
+  if (cmd === "gen") {
+    const secret = genSecret();
+    console.log("secret:", secret);
+    console.log(
+      `otpauth://totp/verreaux-scrape?secret=${secret}&issuer=verreaux-scraper&period=30&digits=6`,
+    );
+    process.exit(0);
+  }
+  const secret = process.env.SCRAPE_TOTP_SECRET;
+  if (!secret) { console.error("SCRAPE_TOTP_SECRET not set"); process.exit(2); }
+  if (cmd === "now") {
+    console.log(totp(secret));
+    process.exit(0);
+  }
+  if (cmd === "verify") {
+    process.exit(verifyTotp(secret, arg ?? "") ? 0 : 1);
+  }
+  console.error("usage: totp.mjs gen | now | verify <code>");
+  process.exit(2);
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npx vitest run test/totp.test.ts`
+Expected: PASS (all three cases).
+
+- [ ] **Step 5: Generate the secret and register it (one-time)**
+
+```bash
+node scripts/totp.mjs gen
+```
+
+This prints a `secret:` line and an `otpauth://` URI. Do two things with it:
+1. Add it to your authenticator app (Google Authenticator / Authy): either paste the
+   `secret` as a manual "time-based" key, or turn the `otpauth://` URI into a QR
+   (any offline QR generator) and scan it.
+2. Store the secret as a GitHub Actions repo secret (requires repo admin):
+
+```bash
+gh secret set SCRAPE_TOTP_SECRET --body "<paste-the-secret-from-step-above>"
+```
+
+Verify the app and the secret agree: `SCRAPE_TOTP_SECRET="<secret>" node scripts/totp.mjs now` should print the same 6 digits your app shows.
+
+- [ ] **Step 6: Commit (the secret value is NOT committed — only the validator code)**
+
+```bash
+git add scripts/totp.mjs test/totp.test.ts
+git commit -m "feat(ci): add RFC 6238 TOTP validator for the scrape gate"
+```
+
+---
+
+## Task 8: GitHub-Actions scrape workflow (TOTP-gated) + README
 
 **Files:**
 - Create: `.github/workflows/scrape.yml`
 - Modify: `README.md`
 
-- [ ] **Step 1: Create the workflow**
-
 The CLI (`verreaux-scrape`, i.e. `dist/cli/index.js`) takes the series URL as a
 **positional argument** plus `--from`/`--to` (or `--chapters`) and `--out`
-(default `./dist`, which we override to `./output` to avoid the build dir).
-On CI we do NOT pass `--allow-headed-cloudflare` — the default headless browser
-clears Cloudflare (proven by the probe). The free-form `args` input carries the
-chapter selection so the full CLI surface stays available.
+(default `./dist`, overridden to `./output` to avoid the build dir). On CI we do
+NOT pass `--allow-headed-cloudflare` — the default headless browser clears
+Cloudflare. The `otp` input is validated **first**, before any build or scrape.
+
+- [ ] **Step 1: Create the workflow**
 
 Create `.github/workflows/scrape.yml`:
 
@@ -1172,7 +1341,8 @@ name: scrape
 
 # Run the scraper from a GitHub runner (off the Zscaler corporate network).
 # Required for qimanhwa.com (Zscaler-blocked locally); also works for manhwanex.
-# Trigger: Actions tab -> scrape -> Run workflow.
+# Gated by a TOTP authenticator code validated server-side as the FIRST step.
+# Trigger via the local wrapper (scripts/scrape-remote.mjs) or the Actions tab.
 
 on:
   workflow_dispatch:
@@ -1186,6 +1356,10 @@ on:
         required: true
         default: "--from 0 --to latest"
         type: string
+      otp:
+        description: "6-digit authenticator code"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -1196,6 +1370,13 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      - name: Validate authenticator code (gate)
+        env:
+          SCRAPE_TOTP_SECRET: ${{ secrets.SCRAPE_TOTP_SECRET }}
+          OTP: ${{ inputs.otp }}
+        run: |
+          if [ -z "$SCRAPE_TOTP_SECRET" ]; then echo "::error::SCRAPE_TOTP_SECRET not configured"; exit 1; fi
+          node scripts/totp.mjs verify "$OTP" || { echo "::error::Invalid authenticator code"; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -1210,7 +1391,6 @@ jobs:
           EXTRA_ARGS: ${{ inputs.args }}
         run: |
           # EXTRA_ARGS is intentionally unquoted so multiple flags word-split.
-          # This workflow is manual (workflow_dispatch) and owner-triggered only.
           node dist/cli/index.js "$SERIES_URL" $EXTRA_ARGS --out ./output --log-format json --no-color
       - name: Upload output ZIPs
         if: always()
@@ -1240,32 +1420,158 @@ And append to the "Corporate networks (Zscaler / MITM proxies)" section:
 
 ```markdown
 **qimanhwa.com** is blocked by Katim's Zscaler under the "Online and Other Games"
-category and cannot be scraped from the corporate network. Run it from GitHub
-Actions instead: Actions tab → **scrape** → Run workflow, with the series URL and
-chapter range. A headless browser clears Cloudflare automatically; output ZIPs are
-uploaded as a build artifact.
+category and cannot be scraped from the corporate network. Scrape it via the
+TOTP-gated GitHub Actions workflow using the local wrapper:
+
+    node scripts/scrape-remote.mjs https://qimanhwa.com/series/<slug> -- --from 1 --to 10
+
+You'll be prompted for your authenticator code; the wrapper dispatches the remote
+run, waits, and downloads the resulting ZIP(s) into ./output — so it feels like a
+local download even though the work runs on GitHub. Output ZIPs are also kept as a
+build artifact for 7 days.
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add .github/workflows/scrape.yml README.md
-git commit -m "ci: add GitHub-Actions scrape workflow; document qimanhwa egress"
+git commit -m "ci: add TOTP-gated GitHub-Actions scrape workflow; document qimanhwa egress"
 ```
 
 ---
 
-## Task 8: Final verification
+## Task 9: Local wrapper — feels-local, runs-remote
+
+**Goal:** one local command that prompts for the authenticator code, dispatches the
+gated workflow, waits for it, and downloads + extracts the ZIP into `./output`.
+
+**Files:**
+- Create: `scripts/scrape-remote.mjs`
+
+- [ ] **Step 1: Implement the wrapper**
+
+Create `scripts/scrape-remote.mjs`:
+
+```javascript
+#!/usr/bin/env node
+// ---------------------------------------------------------------------------
+// scrape-remote.mjs — local wrapper around the TOTP-gated `scrape` workflow.
+//
+// Scrapes a source that is unreachable locally (e.g. qimanhwa, blocked by
+// Zscaler) by running it on GitHub Actions, then downloads the result to
+// ./output. From the user's side it looks like a local download.
+//
+// Requires the GitHub CLI (`gh`) authenticated with write access to the repo.
+//
+// Usage:
+//   node scripts/scrape-remote.mjs <series-url> [-- <extra cli args>]
+//   e.g. node scripts/scrape-remote.mjs https://qimanhwa.com/series/x -- --from 1 --to 10
+// ---------------------------------------------------------------------------
+
+import { execFileSync, spawnSync } from "node:child_process";
+
+function gh(args, opts = {}) {
+  return execFileSync("gh", args, { encoding: "utf8", ...opts }).trim();
+}
+
+// Read a 6-digit code without echoing it to the terminal.
+function promptCode(question) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    process.stdout.write(question);
+    let val = "";
+    const done = () => {
+      if (stdin.isTTY) stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener("data", onData);
+      process.stdout.write("\n");
+      resolve(val.trim());
+    };
+    const onData = (chunk) => {
+      for (const ch of chunk.toString("utf8")) {
+        const code = ch.charCodeAt(0);
+        if (code === 10 || code === 13 || code === 4) return done(); // Enter / EOT
+        if (code === 3) { process.stdout.write("\n"); process.exit(1); } // Ctrl-C
+        if (code === 127 || code === 8) { val = val.slice(0, -1); continue; } // backspace
+        val += ch;
+      }
+    };
+    if (stdin.isTTY) stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+  });
+}
+
+const url = process.argv[2];
+if (!url || url.startsWith("-")) {
+  console.error("usage: scrape-remote.mjs <series-url> [-- <extra cli args>]");
+  process.exit(2);
+}
+const sepIdx = process.argv.indexOf("--");
+const extraArgs = sepIdx === -1 ? "--from 0 --to latest" : process.argv.slice(sepIdx + 1).join(" ");
+
+const code = await promptCode("Authenticator code: ");
+if (!/^\d{6}$/.test(code)) {
+  console.error("Expected a 6-digit code.");
+  process.exit(2);
+}
+
+console.log("Connecting…");
+gh([
+  "workflow", "run", "scrape.yml", "--ref", "main",
+  "-f", `url=${url}`, "-f", `args=${extraArgs}`, "-f", `otp=${code}`,
+]);
+
+// The dispatched run takes a moment to register; grab the newest run id.
+await new Promise((r) => setTimeout(r, 6000));
+const runId = gh([
+  "run", "list", "--workflow=scrape.yml", "--event=workflow_dispatch",
+  "--limit", "1", "--json", "databaseId", "--jq", ".[0].databaseId",
+]);
+if (!runId) { console.error("Could not locate the dispatched run."); process.exit(1); }
+
+// Stream progress; non-zero exit means the OTP gate or the scrape failed.
+console.log("Downloading… (this runs remotely; please wait)");
+const watch = spawnSync("gh", ["run", "watch", runId, "--exit-status", "--interval", "15"], {
+  stdio: "inherit",
+});
+if (watch.status !== 0) {
+  console.error("Failed — invalid code or scrape error. See the run output above.");
+  process.exit(1);
+}
+
+gh(["run", "download", runId, "-n", "scrape-output", "-D", "./output"]);
+console.log("\nDone. Saved to ./output/");
+```
+
+- [ ] **Step 2: Smoke-check the arg parsing (no network)**
+
+Run: `node scripts/scrape-remote.mjs` (with no args)
+Expected: prints the usage line and exits non-zero.
+
+Run: `printf '123\n' | node scripts/scrape-remote.mjs https://qimanhwa.com/series/x -- --from 1 --to 1`
+Expected: it reads the code, then rejects it with "Expected a 6-digit code." (123 is too short) and exits — confirming the prompt + validation path without dispatching. (A correct 6-digit code would proceed to call `gh`.)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/scrape-remote.mjs
+git commit -m "feat(ci): add local wrapper to run + download TOTP-gated remote scrapes"
+```
+
+---
+
+## Task 10: Final verification
 
 - [ ] **Step 1: Full gate**
 
 Run: `npm run lint && npm run typecheck && npm test`
-Expected: lint clean, typecheck clean, all tests pass.
+Expected: lint clean, typecheck clean, all tests pass (includes the new TOTP test).
 
 - [ ] **Step 2: Build succeeds**
 
 Run: `npm run build`
-Expected: builds without error (confirms the new adapters compile under the build tsconfig).
+Expected: builds without error.
 
 - [ ] **Step 3: Push the branch**
 
@@ -1273,12 +1579,17 @@ Expected: builds without error (confirms the new adapters compile under the buil
 git push -u origin feat/manhwanex-qimanhwa-adapters
 ```
 
-- [ ] **Step 4 (optional, live): Smoke-test qimanhwa on GitHub Actions**
+- [ ] **Step 4 (live, end-to-end): qimanhwa via the wrapper**
 
-After the branch is pushed, run the `scrape` workflow against
-`https://qimanhwa.com/series/office-worker-who-sees-fate` with `chapters=1-2` and
-confirm the output artifact contains a non-empty ZIP. (This is the real end-to-end
-proof; do it before merging if you want certainty.)
+After the branch is merged to `main` (the workflow must exist on `main` to be
+dispatchable) and `SCRAPE_TOTP_SECRET` is set (Task 7 Step 5):
+
+```bash
+node scripts/scrape-remote.mjs https://qimanhwa.com/series/office-worker-who-sees-fate -- --from 1 --to 2
+```
+
+Enter your authenticator code when prompted. Expected: the run completes and a
+non-empty ZIP appears under `./output/`. This is the real end-to-end proof.
 
 ---
 
