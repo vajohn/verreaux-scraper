@@ -3,7 +3,7 @@
 // from the series page and the chapter list from the modern Madara endpoint
 // POST {seriesUrl}ajax/chapters/. Reader pages are server-rendered (plain GET).
 import type { SourceAdapter, AdapterContext, ChapterStub, ResolvedSeries, PageStub } from "../core/types.js";
-import { parseSeriesMetadata, parseChapterList, parseReaderImages, ManhwanexParseError, type RawChapter } from "./manhwanex.helpers.js";
+import { parseSeriesMetadata, parseChapterList, parseReaderImages, type RawChapter } from "./manhwanex.helpers.js";
 
 // ---------------------------------------------------------------------------
 // Constants
