@@ -1,0 +1,3 @@
+# Security-sensitive paths require the repo owner's review.
+/.github/        @vajohn
+/scripts/totp.mjs @vajohn

@@ -53,11 +53,15 @@ draft is removed.
 ### manhwanex.com — Madara WordPress theme
 - `wp-content/themes/madara`, `wp-manga`, `admin-ajax.php`, `WordPress 7.0`.
   LiteSpeed, **no Cloudflare**.
-- Series `/manga/<slug>/` **server-renders the full chapter list** in the static
-  DOM (`.wp-manga-chapter` / `listing-chapters_wrap`; real `chapter-<n>` links).
-  Post id exposed as `data-id`. Title `.post-title h1`, cover `.summary_image img`.
-- Chapter images in `.reading-content img` (lazy-loaded via `data-src`).
-- Reachable today via plain `ctx.http.get`; no browser/CF path required.
+- Series `/manga/<slug>/` shows only a 3-chapter "latest" preview in the static
+  DOM; the **full chapter list is AJAX-loaded** from the modern Madara endpoint
+  **`POST /manga/<slug>/ajax/chapters/`**, which returns an HTML fragment of
+  `<li class="wp-manga-chapter">` entries. (The classic `admin-ajax.php?action=
+  manga_get_chapters` endpoint is **dead** on this site — returns `400`.) Title
+  `.post-title h1`, cover `.summary_image img`.
+- Chapter images in `.reading-content img` — server-rendered with a plain `src`
+  (note: the captured fixture's `src` has a leading space, so values are trimmed).
+- Reachable today via plain `ctx.http.get`/`post`; no browser/CF path required.
 
 ### qimanhwa.com — Angular SSR SPA on the "ezmanga/qiscans" platform, JSON API
 - Angular Universal (SSR) app (`_ngcontent-ng-*`, `<script id="ng-state">`). Pages
@@ -106,23 +110,25 @@ drake pair (pure parsers in helpers; adapter orchestrates).
 `ORIGIN="https://manhwanex.com"`. `matchHost` strips `www.`. `domainAliases()`→`[]`.
 `liveDomain()`→`PRIMARY_HOST`.
 
-- **`resolveSeries`** (plain `ctx.http.get`): title `.post-title h1`, cover
-  `.summary_image img` (prefer `data-src`), referer `ORIGIN+"/"`. Parse the
-  server-rendered `.wp-manga-chapter` list → `preEnumeratedChapters` (number+url,
-  sorted ascending). **Fallback only if empty:** `POST admin-ajax.php
-  action=manga_get_chapters` with the series `data-id`, re-parse the fragment.
+- **`resolveSeries`**: GET the series page (plain `ctx.http.get`) for title
+  (`.post-title h1`) and cover (`.summary_image img`, prefer `data-src` then
+  `src`), referer `ORIGIN+"/"`. Then **`POST {seriesUrl}ajax/chapters/`** (modern
+  Madara) and parse the returned `<li class="wp-manga-chapter">` fragment →
+  `preEnumeratedChapters` (number+url, sorted ascending).
 - **`enumerateChapters`** — return `preEnumeratedChapters` else re-run
-  `resolveSeries`.
-- **`parseChapterImages`** — `.reading-content img`, prefer `data-src` over `src`,
-  DOM order, 1-based `pageIndex`, `referer = imageRefererFor(chapter)`.
+  `resolveSeries` (stripping the `adapter.id:` prefix from `seriesId` first).
+- **`parseChapterImages`** — `.reading-content img`, value `data-src ?? src`
+  **trimmed**, DOM order, 1-based `pageIndex`, `referer = imageRefererFor(chapter)`.
 - **`imageRefererFor`** → `chapter.chapterUrl`.
 - **`dismissNsfwSplash`** → no-op (set `wpmanga-adult` cookies only if a real gate
   appears in a fixture).
 - No `fetchChapter`/`fetchImage`, no browser/CF path.
 
-**Tests:** capture a real series + chapter page into `test/fixtures/manhwanex/`;
-unit-test helpers + adapter (title/cover, chapter parse + sort, admin-ajax
-fallback, image `data-src` preference), matching existing fixture-based tests.
+**Tests:** real fixtures in `test/fixtures/manhwanex/` — `series.html` (title/cover),
+`chapters-ajax.html` (the `ajax/chapters` fragment), `chapter.html` (reader page);
+unit-test helpers + adapter (title/cover, chapter parse + ascending sort, correct
+`ajax/chapters` POST URL, trimmed reader-image extraction), matching existing
+fixture-based tests.
 
 ---
 

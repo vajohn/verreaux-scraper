@@ -4,7 +4,7 @@
 
 **Goal:** Add two new source adapters — `manhwanex.com` (Madara WordPress, plain HTTP) and `qimanhwa.com` (Angular SSR SPA, parsed from its embedded `ng-state` data) — plus a GitHub-Actions workflow to run the scraper off the Zscaler-filtered corporate network.
 
-**Architecture:** manhwanex parses server-rendered Madara HTML via `cheerio` (mirrors the existing drake adapter). qimanhwa renders each page through the existing `BrowserPool` (headless on CI clears Cloudflare), then extracts the Angular TransferState JSON blob (`<script id="ng-state">`), which the SSR server populates with the site's REST API responses (series metadata, chapter list, and the full per-chapter image list). No new runtime dependencies.
+**Architecture:** manhwanex parses Madara HTML via `cheerio` (mirrors the existing drake adapter). Its full chapter list is AJAX-loaded — fetched from the modern Madara endpoint `POST /manga/<slug>/ajax/chapters/` (the classic `admin-ajax.php?action=manga_get_chapters` is dead on this site, returns 400). qimanhwa renders each page through the existing `BrowserPool` (headless on CI clears Cloudflare), then extracts the Angular TransferState JSON blob (`<script id="ng-state">`), which the SSR server populates with the site's REST API responses (series metadata, chapter list, and the full per-chapter image list). No new runtime dependencies.
 
 **Tech Stack:** TypeScript (ESM, `.js` import specifiers), `cheerio`, `vitest`, Playwright (via existing `BrowserPool`), GitHub Actions.
 
@@ -176,6 +176,17 @@ git commit -m "feat(types): add manhwanex + qimanhwa to SourceAdapter id union"
 ---
 
 ## Task 3: manhwanex parser helpers
+
+> **AS-BUILT NOTE (corrects this section):** Live investigation showed the
+> manhwanex chapter list is NOT in the static series page — it is AJAX-loaded via
+> `POST /manga/<slug>/ajax/chapters/`. The fixtures used are therefore
+> `series.html` (title/cover), `chapters-ajax.html` (the `ajax/chapters` fragment
+> that `parseChapterList` parses — 33 chapters), and `chapter.html` (a real reader
+> page, 7 images with leading-space `src` that must be trimmed). `extractPostId`
+> was dropped (the slug-based endpoint needs no post id). The committed
+> `src/adapters/manhwanex.helpers.ts` + `test/manhwanex.helpers.test.ts` are
+> authoritative; the code block below reflects the original (pre-investigation)
+> plan and differs only in the fixture wiring and the omission of `extractPostId`.
 
 **Files:**
 - Create: `src/adapters/manhwanex.helpers.ts`
@@ -375,6 +386,14 @@ git commit -m "feat(manhwanex): add Madara parser helpers"
 ---
 
 ## Task 4: manhwanex adapter + registration
+
+> **AS-BUILT NOTE (corrects this section):** `resolveSeries` GETs the series page
+> for title/cover, then **`POST {seriesUrl}ajax/chapters/`** for the chapter-list
+> fragment (NOT the static page, and NOT the dead `admin-ajax.php?action=
+> manga_get_chapters`). `enumerateChapters` strips the `adapter.id:` prefix from
+> `series.seriesId` before re-resolving (matching `hivetoons.ts`). No
+> `fetchChapter` (reader pages are plain GET). The committed `src/adapters/
+> manhwanex.ts` is authoritative.
 
 **Files:**
 - Create: `src/adapters/manhwanex.ts`
