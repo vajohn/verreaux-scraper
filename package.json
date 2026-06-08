@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Multi-source manhwa/manga scraper producing Verreaux-compatible ZIPs",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vajohn/verreaux-scraper.git"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
