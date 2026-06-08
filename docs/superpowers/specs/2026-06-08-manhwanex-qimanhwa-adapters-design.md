@@ -164,12 +164,18 @@ back to the ng-state path below.
   shared `HttpClient`.
 - **`dismissNsfwSplash`** → no-op.
 
-**Fallback (ng-state):** a helper `extractNgState(html)` that renders the page via
-`ctx.browser.renderPage`, extracts `<script id="ng-state" type="application/json">`,
-un-escapes Angular's entity encoding (`&a;`→`&`, `&q;`→`"`, `&s;`→`'`, `&l;`→`<`,
-`&g;`→`>`, `&n;`→`\n`), and reads the cached `{u, b}` entries to recover the same
-series/chapter/images data when a direct API call is unavailable. Used only if the
-API-first path is blocked.
+**Primary path (ng-state via render):** Per the implementation findings, the
+`ng-state` TransferState blob is the most robust source and is promoted to the
+primary parse path (the direct `api.qimanhwa.com` call is a documented future
+optimization). A helper `extractNgState(html)` renders the page via
+`ctx.browser.renderPage` (headless clears Cloudflare on CI), extracts
+`<script id="ng-state" type="application/json">`, and `JSON.parse`s it **directly**
+— the blob is plain JSON (Angular uses `\uXXXX` escapes that `JSON.parse` handles;
+no entity-unescaping needed). It is a map of cached `{ u: <url>, b: <body> }`
+entries; helpers locate the series/chapters/chapter bodies by matching the `u`
+suffix and read the title/cover, chapter list, and `images[]` from them. The
+chapter `images[]` carry `url` + `order`; sort by `order`. Image hosts vary
+(`media.quantumscans.org`, `media.qimanhwa.com`) and are used verbatim.
 
 **Tests:** capture real API JSON (`series`, `chapters`, one `chapter`) and a real
 page (for the ng-state helper) into `test/fixtures/qimanhwa/`; unit-test the JSON
