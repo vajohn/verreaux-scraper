@@ -10,6 +10,8 @@ Multi-source manhwa/manga scraper that produces Verreaux-compatible Type 2 ZIPs 
 | `manhuaplus.org`                                        | ManhuaPlus  | mocked only    |
 | `arenascan.com`                                         | Arenascan   | live-verified  |
 | `drakecomic.org`                                        | Drake Scans | fixture-tested · requires `--allow-headed-cloudflare` |
+| `manhwanex.com`                                         | manhwanex   | Working        |
+| `qimanhwa.com`                                          | qimanhwa    | via GitHub Actions (Zscaler-blocked locally) |
 
 ## Requirements
 
@@ -210,6 +212,17 @@ If `npm install` or live downloads fail with `unable to get local issuer certifi
 ```sh
 NODE_TLS_REJECT_UNAUTHORIZED=0 verreaux-scrape <url> --out ~/Downloads
 ```
+
+**qimanhwa.com** is blocked by Katim's Zscaler under the "Online and Other Games"
+category and cannot be scraped from the corporate network. Scrape it via the
+TOTP-gated GitHub Actions workflow using the local wrapper:
+
+    node scripts/scrape-remote.mjs https://qimanhwa.com/series/<slug> -- --from 1 --to 10
+
+You'll be prompted for your authenticator code; the wrapper dispatches the remote
+run, waits, and downloads the resulting ZIP(s) into ./output — so it feels like a
+local download even though the work runs on GitHub. Output ZIPs are also kept as a
+build artifact for 7 days.
 
 ## Native build note
 
