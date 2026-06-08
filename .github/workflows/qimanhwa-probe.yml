@@ -158,3 +158,121 @@ jobs:
           path: qimanhwa-headless.png
           if-no-files-found: ignore
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 3 — volume probe. Does a full series-scrape pattern (home -> series ->
+  # several chapters, sequential full reloads from one datacenter IP) trip
+  # Cloudflare rate-limiting / harder challenges? Also discovers qimanhwa's URL
+  # structure and dumps real hydrated DOM as artifacts (the capture that
+  # unblocks the parser).
+  # ---------------------------------------------------------------------------
+  volume-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright + stealth
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install playwright-extra puppeteer-extra-plugin-stealth playwright >/dev/null 2>&1
+          npx playwright install --with-deps chromium
+
+      - name: Sequential scrape-pattern load test
+        run: |
+          mkdir -p capture
+          cat > volume.mjs <<'JS'
+          import { addExtra } from 'playwright-extra';
+          import { chromium as base } from 'playwright';
+          import Stealth from 'puppeteer-extra-plugin-stealth';
+          import fs from 'node:fs';
+
+          const chromium = addExtra(base);
+          chromium.use(Stealth());
+          const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
+          const browser = await chromium.launch({ headless: true });
+          const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 800 } });
+          const page = await ctx.newPage();
+          const results = [];
+
+          async function visit(label, url, settleMs = 6000) {
+            const t0 = Date.now();
+            let status = 'n/a', cfm = '';
+            try {
+              const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+              status = resp ? resp.status() : 'no-response';
+              cfm = resp ? (resp.headers()['cf-mitigated'] || '') : '';
+              await page.waitForTimeout(settleMs);
+            } catch (e) { status = 'ERR'; cfm = e.message.slice(0, 80); }
+            const ms = Date.now() - t0;
+            const title = await page.title().catch(() => '');
+            const rec = { label, status, cfm, ms, title, url };
+            results.push(rec);
+            console.log(`[${label}] status=${status} cf-mitigated="${cfm}" ${ms}ms title="${title}"`);
+            return rec;
+          }
+
+          // 1) Home + discover internal link structure
+          await visit('home', 'https://qimanhwa.com/');
+          fs.writeFileSync('capture/home.html', await page.content());
+          const links = await page.$$eval('a[href]', as => as.map(a => a.getAttribute('href')).filter(Boolean));
+          const internal = [...new Set(links)]
+            .filter(h => h.startsWith('/') || h.includes('qimanhwa.com'))
+            .map(h => h.startsWith('http') ? h : 'https://qimanhwa.com' + h);
+          const prefixes = {};
+          for (const h of internal) { try { const seg = new URL(h).pathname.split('/').filter(Boolean)[0] || '(root)'; prefixes[seg] = (prefixes[seg] || 0) + 1; } catch {} }
+          console.log('URL path prefixes seen:', JSON.stringify(prefixes));
+
+          // Heuristic: a series page has a 2-segment path that is not a nav item.
+          const NAV = new Set(['browse', 'store', 'sign-in', 'signin', 'login', 'genres', 'search', 'about', 'contact', 'terms', 'privacy']);
+          const seriesCandidates = [...new Set(internal)].filter(h => {
+            try { const segs = new URL(h).pathname.split('/').filter(Boolean); return segs.length >= 2 && !NAV.has(segs[0]); } catch { return false; }
+          });
+          console.log('series candidates (first 8):', seriesCandidates.slice(0, 8));
+
+          // 2) Visit a series page, discover chapter links
+          let chapters = [];
+          if (seriesCandidates.length) {
+            await visit('series', seriesCandidates[0]);
+            fs.writeFileSync('capture/series.html', await page.content());
+            const clinks = await page.$$eval('a[href]', as => as.map(a => a.getAttribute('href')).filter(Boolean));
+            chapters = [...new Set(clinks)]
+              .filter(h => /chapter|\/ch[\.\-_]?\d|\/\d+(\/)?$/i.test(h))
+              .map(h => h.startsWith('http') ? h : 'https://qimanhwa.com' + h);
+            console.log(`discovered ${chapters.length} chapter links; first 5:`, chapters.slice(0, 5));
+          } else {
+            console.log('No series candidates found from homepage anchors (SPA may gate links behind JS interaction).');
+          }
+
+          // 3) Sequential chapter hits = the load test (full reloads, no pacing)
+          const toHit = chapters.slice(0, 6);
+          for (let i = 0; i < toHit.length; i++) {
+            const r = await visit(`chapter-${i + 1}`, toHit[i], 4000);
+            if (i === 0) fs.writeFileSync('capture/chapter.html', await page.content());
+          }
+
+          // Summary + verdict
+          const flagged = results.filter(r => /challenge|block/i.test(r.cfm) || /^(4|5)/.test(String(r.status)) || r.status === 'ERR');
+          console.log('\n==== VOLUME SUMMARY ====');
+          console.log(`navigations=${results.length} flagged(4xx/5xx/challenge/err)=${flagged.length}`);
+          console.log(JSON.stringify(results, null, 2));
+          console.log('VERDICT:', flagged.length === 0
+            ? 'CLEAN — no rate-limiting or challenge escalation across the sequence'
+            : `DEGRADED — ${flagged.length}/${results.length} navigations were challenged/blocked (see records)`);
+
+          await browser.close();
+          process.exit(0);
+          JS
+          node volume.mjs
+
+      - name: Upload captured DOM (home/series/chapter)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qimanhwa-real-dom-capture
+          path: capture/*.html
+          if-no-files-found: ignore
+          retention-days: 7
