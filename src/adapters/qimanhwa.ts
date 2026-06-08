@@ -120,7 +120,14 @@ class QimanhwaAdapter implements SourceAdapter {
     if (series.preEnumeratedChapters && series.preEnumeratedChapters.length > 0) {
       return series.preEnumeratedChapters;
     }
-    const { preEnumeratedChapters } = await this.resolveSeries(ctx, series.seriesId);
+    // series.seriesId is stored as `${adapter.id}:${seriesUrl}` by the pipeline.
+    // Strip the prefix to recover the original series URL before re-resolving.
+    let seriesUrl = series.seriesId;
+    const prefix = `${this.id}:`;
+    if (seriesUrl.startsWith(prefix)) {
+      seriesUrl = seriesUrl.slice(prefix.length);
+    }
+    const { preEnumeratedChapters } = await this.resolveSeries(ctx, seriesUrl);
     return preEnumeratedChapters ?? [];
   }
 

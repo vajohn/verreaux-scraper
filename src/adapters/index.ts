@@ -2,8 +2,8 @@
 // adapters/index.ts — Adapter registry.
 //
 // Routes URLs to their SourceAdapter implementation.
-// AsuraScans, ManhuaPlus, Arenascan, Drake, Hivetoons, and Manhwanex adapters
-// are registered.
+// AsuraScans, ManhuaPlus, Arenascan, Drake, Hivetoons, Manhwanex, and Qimanhwa
+// adapters are registered.
 // ---------------------------------------------------------------------------
 
 import type { SourceAdapter } from "../core/types.js";
