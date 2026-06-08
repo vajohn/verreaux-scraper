@@ -294,7 +294,7 @@ jobs:
           npm init -y >/dev/null 2>&1
           npm install playwright-extra puppeteer-extra-plugin-stealth playwright >/dev/null 2>&1
           npx playwright install --with-deps chromium
-      - name: Fetch /api/v1 endpoints from a CF-cleared context
+      - name: Capture the real API host + dump JSON responses
         run: |
           mkdir -p api
           cat > api.mjs <<'JS'
@@ -307,25 +307,41 @@ jobs:
           const browser = await chromium.launch({ headless:true });
           const ctx = await browser.newContext({ userAgent:UA });
           const page = await ctx.newPage();
-          // Clear CF by loading the SPA origin first.
-          await page.goto('https://qimanhwa.com/', { waitUntil:'domcontentloaded', timeout:45000 });
-          await page.waitForTimeout(6000);
-          const SLUG='office-worker-who-sees-fate';
-          const endpoints = {
-            series:   `https://qimanhwa.com/api/v1/series/${SLUG}`,
-            chapters: `https://qimanhwa.com/api/v1/series/${SLUG}/chapters`,
-            chapter0: `https://qimanhwa.com/api/v1/series/${SLUG}/chapters/chapter-0`,
-          };
-          for (const [name,url] of Object.entries(endpoints)) {
-            const r = await page.evaluate(async (u) => {
-              try { const res = await fetch(u, { headers:{accept:'application/json'} });
-                const txt = await res.text(); return { status:res.status, ct:res.headers.get('content-type'), txt }; }
-              catch(e){ return { status:'ERR', txt:String(e) }; }
-            }, url);
-            console.log(`\n[${name}] ${url}\n  status=${r.status} content-type=${r.ct}`);
-            console.log('  body (first 700 chars):', (r.txt||'').slice(0,700).replace(/\n/g,' '));
-            fs.writeFileSync(`api/${name}.json`, r.txt||'');
+
+          // Record every XHR/fetch the Angular app issues + its JSON responses.
+          const apiHits = [];
+          page.on('response', async (resp) => {
+            const u = resp.url();
+            if (/\/api\//i.test(u) || /ezmanga|qiscans/i.test(u)) {
+              const ct = resp.headers()['content-type'] || '';
+              let body = '';
+              if (/json/i.test(ct)) { try { body = (await resp.text()).slice(0, 4000); } catch {} }
+              apiHits.push({ url: u, status: resp.status(), ct });
+              if (body) {
+                const key = u.replace(/[^a-z0-9]+/gi, '_').slice(-80);
+                fs.writeFileSync(`api/${key}.json`, body);
+              }
+            }
+          });
+
+          console.log('--- loading home (clears CF, fires home API calls) ---');
+          await page.goto('https://qimanhwa.com/', { waitUntil:'networkidle', timeout:60000 }).catch(()=>{});
+          await page.waitForTimeout(5000);
+          console.log('--- loading a series page (fires series + chapters API) ---');
+          await page.goto('https://qimanhwa.com/series/office-worker-who-sees-fate', { waitUntil:'networkidle', timeout:60000 }).catch(()=>{});
+          await page.waitForTimeout(5000);
+          console.log('--- loading a chapter page (fires chapter/images API) ---');
+          await page.goto('https://qimanhwa.com/series/office-worker-who-sees-fate/chapter-0', { waitUntil:'networkidle', timeout:60000 }).catch(()=>{});
+          await page.waitForTimeout(5000);
+
+          console.log('\n==== DISTINCT API REQUESTS OBSERVED ====');
+          const seen = new Set();
+          for (const h of apiHits) {
+            const k = h.url.split('?')[0];
+            if (seen.has(k)) continue; seen.add(k);
+            console.log(`  ${h.status}  ${h.ct.split(';')[0].padEnd(20)}  ${h.url}`);
           }
+          fs.writeFileSync('api/_requests.json', JSON.stringify(apiHits, null, 2));
           await browser.close(); process.exit(0);
           JS
           node api.mjs
