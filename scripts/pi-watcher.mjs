@@ -21,7 +21,10 @@ const deps = {
     new Promise((resolve) => {
       const log = createWriteStream(logPath);
       // EXTRA args word-split intentionally, matching the old GitHub job.
-      const extra = job.args.length ? job.args.split(/\s+/) : [];
+      // Trim first so surrounding/internal whitespace can't yield empty-string
+      // argv tokens (e.g. "  --to latest  ").
+      const trimmed = job.args.trim();
+      const extra = trimmed ? trimmed.split(/\s+/) : [];
       const argv =
         job.type === "probe"
           ? [join(here, "pi-probe.mjs"), job.url, "--out", outDir]
@@ -45,6 +48,11 @@ function enqueue(jobPath) {
 
 // Orphan recovery: anything left in *.processing from a crash is failed out.
 async function recoverOrphans() {
+  // Ensure the working dirs exist so a cold start (before any volume is
+  // populated) doesn't crash on readdir/ENOENT before the watcher installs.
+  for (const d of [dirs.jobs, dirs.done, dirs.state]) {
+    await mkdir(d, { recursive: true }).catch(() => {});
+  }
   for (const f of readdirSync(dirs.jobs).filter((f) => f.endsWith(".json.processing"))) {
     const id = f.replace(/\.json\.processing$/, "");
     const doneDir = join(dirs.done, id);
@@ -62,6 +70,7 @@ console.log(`[pi-watcher] watching ${dirs.jobs}`);
 // chokidar v4: watch the directory (no globs), filter in the handler.
 chokidar
   .watch(dirs.jobs, { ignoreInitial: false, depth: 0, awaitWriteFinish: { stabilityThreshold: 500 } })
+  .on("error", (err) => console.error("[pi-watcher] chokidar error:", err))
   .on("add", (p) => {
     const name = basename(p);
     // Only pick up fresh job files; ignore the *.processing/*.done sentinels.
