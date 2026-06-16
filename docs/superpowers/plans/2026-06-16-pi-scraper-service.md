@@ -11,6 +11,8 @@
 **Spec:** `docs/superpowers/specs/2026-06-16-scraper-pi-migration-design.md`
 **Scope:** This is Subsystem A only. The PWA changes (`sourceUrl`, Dexie v5, dual import, update-from-source, back-fill) are a separate plan in the `verreaux` repo.
 
+> **➡️ When this plan is fully implemented and Task 14 E2E has passed, continue to Plan B (Subsystem B — PWA):** `app/docs/superpowers/plans/2026-06-16-pwa-source-url-and-update.md`. Plan B depends on this plan's `verreaux.json` manifest (Task 4) and HTTP API contract (Task 7) — record the Funnel URL from Task 14 Step 6 for Plan B's API config.
+
 ---
 
 ## File Structure
