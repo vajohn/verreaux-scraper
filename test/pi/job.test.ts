@@ -15,15 +15,19 @@ describe("job model", () => {
       args: "--from 1 --to 10",
     });
     const job = parseJob(json);
+    expect(job.id).toBe("20260616-153012-ab12");
     expect(job.type).toBe("scrape");
     expect(job.url).toBe("https://qimanhwa.com/series/x");
     expect(job.args).toBe("--from 1 --to 10");
   });
 
   it("defaults type to scrape and args to empty string", () => {
-    const job = parseJob('{"id":"i","url":"https://x.test/s"}');
+    const job = parseJob('{"url":"https://x.test/s"}');
     expect(job.type).toBe("scrape");
     expect(job.args).toBe("");
+    // Documents the deliberate contract: a missing id parses to "" (the
+    // runner assigns a fallback id from the filename).
+    expect(job.id).toBe("");
   });
 
   it("rejects a job with a missing/invalid url", () => {
