@@ -425,4 +425,38 @@ describe("Packager", () => {
     const hasCover = zip.getEntries().some((e) => /\/cover\./.test(e.entryName));
     expect(hasCover).toBe(false);
   });
+
+  it("embeds verreaux.json at the ZIP root when a manifest is supplied", async () => {
+    const { readFileSync } = await import("node:fs");
+    const staging = await buildStaging(tmpDir, "run-manifest", 1, 2);
+    const result = await packager.build(staging, {
+      outPath: join(tmpDir, "with-manifest"),
+      seriesTitle: "Solo Leveling",
+      allowPartial: true,
+      manifest: {
+        schema: 1,
+        sourceUrl: "https://qimanhwa.com/series/solo",
+        seriesTitle: "Solo Leveling",
+        adapter: "qimanhwa",
+        chapterRange: { from: 0, to: "latest" },
+        generatedAt: "2026-06-16T15:30:12Z",
+      },
+    });
+    const buf = readFileSync(result.path);
+    const names = parseZipEntries(buf).map((e) => e.name);
+    expect(names).toContain("verreaux.json");
+    expect(names).not.toContain("Solo Leveling/verreaux.json");
+  });
+
+  it("omits verreaux.json when no manifest is supplied", async () => {
+    const { readFileSync } = await import("node:fs");
+    const staging = await buildStaging(tmpDir, "run-nomanifest", 1, 2);
+    const result = await packager.build(staging, {
+      outPath: join(tmpDir, "no-manifest"),
+      seriesTitle: "Solo Leveling",
+      allowPartial: true,
+    });
+    const names = parseZipEntries(readFileSync(result.path)).map((e) => e.name);
+    expect(names).not.toContain("verreaux.json");
+  });
 });

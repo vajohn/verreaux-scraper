@@ -12,6 +12,7 @@ import type { BrowserPool } from "../transport/browser.js";
 import type { CfHandler } from "../transport/cf.js";
 import { StagingDir } from "../packaging/staging.js";
 import { Packager } from "../packaging/packager.js";
+import { buildManifest } from "../pi/manifest.js";
 import { adapterRegistry } from "../adapters/index.js";
 import type { SourceAdapter, AdapterContext } from "./types.js";
 import { selectChapters, EmptyRangeError, NoChaptersInRangeError } from "./selectRange.js";
@@ -486,6 +487,14 @@ export class Pipeline {
         outPath,
         seriesTitle: resolvedSeries.seriesTitle,
         allowPartial: config.allowPartialZip,
+        manifest: buildManifest({
+          sourceUrl: config.seriesUrl,
+          seriesTitle: resolvedSeries.seriesTitle,
+          adapter: adapter.id,
+          from: config.from,
+          to: config.to,
+          generatedAt: new Date().toISOString(),
+        }),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
