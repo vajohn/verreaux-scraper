@@ -10,7 +10,9 @@ import { join } from "node:path";
 
 const url = process.argv[2] ?? "https://qimanhwa.com/";
 const outIdx = process.argv.indexOf("--out");
-const outDir = outIdx >= 0 ? process.argv[outIdx + 1] : "./probe-out";
+// Guard the flag-with-no-value case so mkdirSync never gets undefined (which
+// would crash before the try/finally and break the always-exit-0 contract).
+const outDir = outIdx >= 0 && process.argv[outIdx + 1] ? process.argv[outIdx + 1] : "./probe-out";
 mkdirSync(outDir, { recursive: true });
 
 const UA =
@@ -47,7 +49,7 @@ try {
   verdict = isChallenge ? "BLOCKED — Cloudflare challenge" : /manhwa/i.test(title) ? "SUCCESS — content rendered" : "INCONCLUSIVE";
   console.log(JSON.stringify({ status, title, verdict, apiHits: apiHits.length }, null, 2));
 } catch (err) {
-  console.log(JSON.stringify({ verdict: "ERROR", message: err.message }, null, 2));
+  console.log(JSON.stringify({ verdict: "ERROR", message: err?.message ?? String(err) }, null, 2));
 } finally {
   writeFileSync(join(outDir, "_requests.json"), JSON.stringify(apiHits, null, 2));
   await browser.close();

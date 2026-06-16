@@ -18,10 +18,13 @@ const deps = {
   newSuffix: () => randomBytes(2).toString("hex"),
   corsOrigin: process.env.CORS_ORIGIN ?? "*",
 };
-const PORT = Number(process.env.PORT ?? 8080);
+// `||` (not `??`) so an empty-string PORT (a common .env/compose accident)
+// falls back to 8080 instead of Number("") === 0 binding a random port.
+const PORT = Number(process.env.PORT || 8080);
 createServer((req, res) => {
   handleApiRequest(req, res, deps).catch((err) => {
     res.statusCode = 500;
+    res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ error: err?.message ?? "internal error" }));
   });
 }).listen(PORT, () => console.log(`[pi-api] listening on :${PORT}`));
