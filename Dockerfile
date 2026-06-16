@@ -22,9 +22,8 @@ COPY src ./src
 COPY scripts ./scripts
 RUN npm run build
 
-# The base image already ships the matching Chromium; this is a cheap no-op
-# verification that the browser Playwright expects is present.
-RUN npx playwright install chromium
+# No `playwright install` here: the v1.60.0-jammy base image already ships the
+# matching Chromium, so re-running it only adds a build-time network call.
 
 ENV VERREAUX_ROOT=/work
 RUN mkdir -p /work/jobs /work/done /work/state

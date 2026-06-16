@@ -56,6 +56,12 @@ export async function processJob(
   const doneDir = join(dirs.done, job.id);
   await mkdir(doneDir, { recursive: true });
 
+  // Mark the job in-flight by renaming to <id>.json.processing. This is what
+  // the watcher's orphan recovery scans for after a crash, so a job that dies
+  // mid-scrape is detectable on restart rather than silently re-run.
+  const processingPath = join(dirs.jobs, `${job.id}.json.processing`);
+  await rename(jobPath, processingPath).catch(() => undefined);
+
   const started = runningStatus(deps.now());
   await writeStatus(doneDir, started);
 
@@ -73,5 +79,5 @@ export async function processJob(
   }
 
   await writeStatus(doneDir, finalStatus(started, exitCode, deps.now(), message));
-  await rename(jobPath, join(dirs.jobs, `${job.id}.json.done`)).catch(() => undefined);
+  await rename(processingPath, join(dirs.jobs, `${job.id}.json.done`)).catch(() => undefined);
 }

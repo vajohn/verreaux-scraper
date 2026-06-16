@@ -37,6 +37,27 @@ describe("processJob", () => {
     expect(readdirSync(dirs.jobs)).toEqual(["j1.json.done"]);
   });
 
+  it("marks the job .processing while the scrape runs (for crash recovery)", async () => {
+    const dirs = makeDirs();
+    const jobPath = join(dirs.jobs, "j3.json");
+    writeFileSync(jobPath, JSON.stringify({ id: "j3", type: "scrape", url: "https://x.test/s" }));
+
+    let sawProcessing = false;
+    await processJob(jobPath, dirs, {
+      now: () => "2026-06-16T15:30:12Z",
+      // The in-flight sentinel must exist at the moment the scrape runs, so a
+      // crash here leaves a *.json.processing for the watcher to recover.
+      runScrape: async () => {
+        sawProcessing = existsSync(join(dirs.jobs, "j3.json.processing"));
+        return 0;
+      },
+    });
+
+    expect(sawProcessing).toBe(true);
+    // After success the sentinel is renamed to the terminal .done form.
+    expect(readdirSync(dirs.jobs)).toEqual(["j3.json.done"]);
+  });
+
   it("writes a failed status on non-zero exit", async () => {
     const dirs = makeDirs();
     const jobPath = join(dirs.jobs, "j2.json");

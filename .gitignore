@@ -16,3 +16,5 @@ Thumbs.db
 coverage/
 .idea/
 test/fixtures/**/*.real.html
+# Pi runtime job-queue + state (compose bind mounts) — never commit scraped output
+data/

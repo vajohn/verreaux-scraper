@@ -59,7 +59,7 @@ async function recoverOrphans() {
     await mkdir(doneDir, { recursive: true }).catch(() => {});
     await writeFile(
       join(doneDir, "status.json"),
-      JSON.stringify({ state: "failed", message: "interrupted by restart", exitCode: 1, startedAt: null, finishedAt: new Date().toISOString() }, null, 2),
+      JSON.stringify({ state: "failed", message: "interrupted by restart", exitCode: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }, null, 2),
     ).catch(() => {});
     if (existsSync(join(dirs.jobs, f))) renameSync(join(dirs.jobs, f), join(dirs.jobs, `${id}.json.done`));
   }
