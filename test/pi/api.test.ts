@@ -77,4 +77,19 @@ describe("api", () => {
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
   });
+
+  it("rejects a valid-OTP scrape with an invalid (non-http) url (400) and writes no job", async () => {
+    const res = await fetch(`${ctx.base}/scrape`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "ftp://bad/host", otp: totp(SECRET, 1_700_000_000_000) }),
+    });
+    expect(res.status).toBe(400);
+    expect(readdirSync(dirs.jobs)).toEqual([]);
+  });
+
+  it("returns 404 for a run that does not exist", async () => {
+    const res = await fetch(`${ctx.base}/runs/nope`);
+    expect(res.status).toBe(404);
+  });
 });

@@ -51,7 +51,11 @@ export async function handleApiRequest(
   if (req.method === "POST" && path === "/scrape") {
     let payload: Record<string, unknown>;
     try {
-      payload = JSON.parse(await readBody(req)) as Record<string, unknown>;
+      const parsed = JSON.parse(await readBody(req)) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return json(res, 400, { error: "expected a JSON object body" });
+      }
+      payload = parsed as Record<string, unknown>;
     } catch {
       return json(res, 400, { error: "invalid JSON body" });
     }
@@ -90,14 +94,21 @@ export async function handleApiRequest(
         if (zip === undefined) return json(res, 404, { error: "no zip yet" });
         res.statusCode = 200;
         res.setHeader("content-type", "application/zip");
-        res.setHeader("content-disposition", `attachment; filename="${zip}"`);
-        createReadStream(join(runDir, zip)).pipe(res);
+        // Sanitize the filesystem-derived name before putting it in a header.
+        const safeName = zip.replace(/[^A-Za-z0-9._-]/g, "_");
+        res.setHeader("content-disposition", `attachment; filename="${safeName}"`);
+        // A stream error after headers are sent can't become a 404; end the
+        // response rather than letting an unhandled 'error' crash the process.
+        createReadStream(join(runDir, zip)).on("error", () => res.end()).pipe(res);
         return;
       }
       if (sub === "/log") {
+        // readFile (not a stream) so a missing log stays inside this try and
+        // returns a proper 404 via the catch below. Logs are small.
+        const logText = await readFile(join(runDir, "run.log"), "utf8");
         res.statusCode = 200;
         res.setHeader("content-type", "text/plain");
-        createReadStream(join(runDir, "run.log")).on("error", () => res.end()).pipe(res);
+        res.end(logText);
         return;
       }
       const status = await readFile(join(runDir, "status.json"), "utf8");
