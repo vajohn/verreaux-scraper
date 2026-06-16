@@ -12,7 +12,8 @@
   },
   "bin": {
     "verreaux-scrape": "./dist/cli/index.js",
-    "verreaux-scrape-remote": "./scripts/scrape-remote.mjs"
+    "verreaux-scrape-remote": "./scripts/scrape-remote.mjs",
+    "verreaux-scrape-pi": "./scripts/scrape-pi.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
