@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { deflateRawSync } from "node:zlib";
 import { makeTmpDir } from "./setup.js";
 import { StagingDir } from "../src/packaging/staging.js";
@@ -426,8 +426,7 @@ describe("Packager", () => {
     expect(hasCover).toBe(false);
   });
 
-  it("embeds verreaux.json at the ZIP root when a manifest is supplied", async () => {
-    const { readFileSync } = await import("node:fs");
+  it("embeds verreaux.json at the ZIP root (DEFLATE) when a manifest is supplied", async () => {
     const staging = await buildStaging(tmpDir, "run-manifest", 1, 2);
     const result = await packager.build(staging, {
       outPath: join(tmpDir, "with-manifest"),
@@ -443,13 +442,16 @@ describe("Packager", () => {
       },
     });
     const buf = readFileSync(result.path);
-    const names = parseZipEntries(buf).map((e) => e.name);
+    const entries = parseZipEntries(buf);
+    const names = entries.map((e) => e.name);
     expect(names).toContain("verreaux.json");
     expect(names).not.toContain("Solo Leveling/verreaux.json");
+    // The manifest is small JSON, so it is DEFLATE'd (method 8), unlike the
+    // STORED (method 0) already-compressed page images.
+    expect(entries.find((e) => e.name === "verreaux.json")?.compressionMethod).toBe(8);
   });
 
   it("omits verreaux.json when no manifest is supplied", async () => {
-    const { readFileSync } = await import("node:fs");
     const staging = await buildStaging(tmpDir, "run-nomanifest", 1, 2);
     const result = await packager.build(staging, {
       outPath: join(tmpDir, "no-manifest"),

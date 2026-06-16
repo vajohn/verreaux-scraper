@@ -13,6 +13,7 @@ export interface BuildManifestInput {
   adapter: string;
   from: number;
   to: number | "latest";
+  /** ISO timestamp of when the ZIP was sealed (packaging time), not run start. */
   generatedAt: string;
 }
 

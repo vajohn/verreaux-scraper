@@ -185,6 +185,10 @@ export class Packager {
 
     archive.pipe(output);
 
+    // Root-level provenance manifest. Unlike the already-compressed page
+    // images (STORED), this small JSON benefits from compression, so it is a
+    // deliberate per-entry DEFLATE override (store: false) — the second such
+    // override alongside the PNG cover above.
     if (manifest) {
       archive.append(JSON.stringify(manifest, null, 2), {
         name: "verreaux.json",
