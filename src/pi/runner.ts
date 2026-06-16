@@ -1,5 +1,4 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseJob, type ScrapeJob } from "./job.js";
 import { runningStatus, finalStatus, type RunStatus } from "./status.js";
@@ -40,7 +39,7 @@ export async function processJob(
 
   let job: ScrapeJob;
   try {
-    job = parseJob(readFileSync(jobPath, "utf8"));
+    job = parseJob(await readFile(jobPath, "utf8"));
     if (!job.id) job.id = fallbackId;
   } catch (err) {
     const doneDir = join(dirs.done, fallbackId);
@@ -69,7 +68,7 @@ export async function processJob(
       logPath: join(doneDir, "run.log"),
     });
   } catch (err) {
-    exitCode = 1;
+    // exitCode stays at its initial 1; record the thrown reason.
     message = err instanceof Error ? err.message : String(err);
   }
 
