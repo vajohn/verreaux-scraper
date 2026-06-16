@@ -20,4 +20,14 @@ describe("totp", () => {
   it("rejects a wrong code", () => {
     expect(verifyTotp(SECRET, "000000", 1_700_000_000_000)).toBe(false);
   });
+
+  it("rejects a code of the wrong length", () => {
+    expect(verifyTotp(SECRET, "12345", 1_700_000_000_000)).toBe(false);
+  });
+
+  it("honors a custom step size in both generate and verify", () => {
+    const at = 1_700_000_000_000;
+    const code = totp(SECRET, at, 60);
+    expect(verifyTotp(SECRET, code, at, 60)).toBe(true);
+  });
 });

@@ -39,10 +39,17 @@ export function totp(secretBase32: string, atMs: number, step = 30, digits = 6):
   return (code % 10 ** digits).toString().padStart(digits, "0");
 }
 
-export function verifyTotp(secretBase32: string, code: string, atMs: number): boolean {
+export function verifyTotp(
+  secretBase32: string,
+  code: string,
+  atMs: number,
+  step = 30,
+  digits = 6,
+): boolean {
   const c = String(code).trim();
+  if (c.length !== digits) return false;
   for (const drift of [-1, 0, 1]) {
-    if (totp(secretBase32, atMs + drift * 30_000) === c) return true;
+    if (totp(secretBase32, atMs + drift * step * 1000, step, digits) === c) return true;
   }
   return false;
 }
