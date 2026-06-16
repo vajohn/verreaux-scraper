@@ -262,10 +262,10 @@ auth gate.
 5. PWA **add-from-URL** and **update-from-source** actions.
 6. Retire the GitHub workflows.
 
-## Open assumptions to confirm
+## Confirmed assumptions
 
 - **Update = incremental** (scrape `from lastKnownMaxOrder+1`), not full
   re-scrape. Full re-scrape remains available via add-from-URL with an explicit
-  range.
+  range. *(Confirmed 2026-06-16.)*
 - **OTP gate stays on even for LAN HTTP** API use (defense in depth), since the
-  same service may be Funnel-exposed.
+  same service may be Funnel-exposed. *(Confirmed 2026-06-16.)*
