@@ -1,0 +1,37 @@
+services:
+  worker:
+    build: .
+    image: verreaux-scraper:dev
+    restart: unless-stopped
+    environment:
+      VERREAUX_ROOT: /work
+      FLARESOLVERR_URL: http://flaresolverr:8191/v1
+    volumes:
+      - ./data/jobs:/work/jobs
+      - ./data/done:/work/done
+      - ./data/state:/work/state
+    depends_on:
+      - flaresolverr
+    command: ["node", "scripts/pi-watcher.mjs"]
+
+  api:
+    image: verreaux-scraper:dev
+    restart: unless-stopped
+    environment:
+      VERREAUX_ROOT: /work
+      PORT: "8080"
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      SCRAPE_TOTP_SECRET: ${SCRAPE_TOTP_SECRET:?set SCRAPE_TOTP_SECRET in .env}
+    volumes:
+      - ./data/jobs:/work/jobs
+      - ./data/done:/work/done
+      - ./data/state:/work/state
+    ports:
+      - "8080:8080"
+    command: ["node", "scripts/pi-api.mjs"]
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
