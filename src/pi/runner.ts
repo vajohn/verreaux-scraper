@@ -27,6 +27,35 @@ async function writeStatus(doneDir: string, status: RunStatus): Promise<void> {
 }
 
 /**
+ * Pull the CLI's failure reason out of a JSON run.log so a failed run carries an
+ * actionable message (e.g. "ERR_EMPTY_RANGE: No chapters found in range [0, 1].")
+ * instead of a bare exit code. Returns the last `run.fatal` payload message, or
+ * null if none is found.
+ */
+export function extractFailureMessage(log: string): string | null {
+  const lines = log.split(/\r?\n/).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(lines[i]!);
+    } catch {
+      continue;
+    }
+    if (typeof obj !== "object" || obj === null) continue;
+    const o = obj as Record<string, unknown>;
+    if (o["event"] !== "run.fatal") continue;
+    const payload = o["payload"];
+    if (typeof payload !== "object" || payload === null) continue;
+    const p = payload as Record<string, unknown>;
+    const msg = p["message"];
+    if (typeof msg !== "string") continue;
+    const code = typeof p["code"] === "string" ? p["code"] : null;
+    return code ? `${code}: ${msg}` : msg;
+  }
+  return null;
+}
+
+/**
  * Process a single job file end-to-end. Never throws: any failure is recorded
  * as a `failed` status so the watcher loop keeps running.
  */
@@ -76,6 +105,13 @@ export async function processJob(
   } catch (err) {
     // exitCode stays at its initial 1; record the thrown reason.
     message = err instanceof Error ? err.message : String(err);
+  }
+
+  // On a non-zero CLI exit, surface the reason from the run log (best-effort)
+  // so the API/PWA show "why" rather than a bare "failed".
+  if (exitCode !== 0 && message === null) {
+    const log = await readFile(join(doneDir, "run.log"), "utf8").catch(() => "");
+    message = extractFailureMessage(log);
   }
 
   await writeStatus(doneDir, finalStatus(started, exitCode, deps.now(), message));

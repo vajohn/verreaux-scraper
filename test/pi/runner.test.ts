@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { processJob } from "../../src/pi/runner.js";
+import { processJob, extractFailureMessage } from "../../src/pi/runner.js";
 import type { RunnerDeps } from "../../src/pi/runner.js";
 
 function makeDirs() {
@@ -80,5 +80,48 @@ describe("processJob", () => {
     expect(readdirSync(dirs.jobs)).toEqual(["bad.json.done"]);
     const failed = JSON.parse(readFileSync(join(dirs.done, "bad", "status.json"), "utf8"));
     expect(failed.state).toBe("failed");
+  });
+
+  it("surfaces the CLI fatal reason from run.log into the failed status", async () => {
+    const dirs = makeDirs();
+    const jobPath = join(dirs.jobs, "j5.json");
+    writeFileSync(jobPath, JSON.stringify({ id: "j5", type: "scrape", url: "https://x.test/s" }));
+
+    await processJob(jobPath, dirs, {
+      now: () => "2026-06-16T15:30:12Z",
+      // Mimic the real watcher: write the CLI's JSON log, then exit non-zero.
+      runScrape: async ({ logPath }) => {
+        writeFileSync(
+          logPath,
+          '{"event":"run.init","payload":{}}\n' +
+            '{"event":"run.fatal","payload":{"code":"ERR_EMPTY_RANGE","message":"No chapters found in range [0, 1]."}}\n',
+        );
+        return 2;
+      },
+    });
+
+    const status = JSON.parse(readFileSync(join(dirs.done, "j5", "status.json"), "utf8"));
+    expect(status.state).toBe("failed");
+    expect(status.exitCode).toBe(2);
+    expect(status.message).toBe("ERR_EMPTY_RANGE: No chapters found in range [0, 1].");
+  });
+});
+
+describe("extractFailureMessage", () => {
+  it("returns the last run.fatal message with its code", () => {
+    const log =
+      '{"event":"run.init","payload":{}}\n' +
+      '{"event":"run.fatal","payload":{"code":"ERR_EMPTY_RANGE","message":"No chapters found in range [0, 1]."}}\n' +
+      '{"event":"cli.summary","payload":{"status":"failed","exitCode":2}}';
+    expect(extractFailureMessage(log)).toBe("ERR_EMPTY_RANGE: No chapters found in range [0, 1].");
+  });
+
+  it("returns the message without a code when none is present", () => {
+    expect(extractFailureMessage('{"event":"run.fatal","payload":{"message":"boom"}}')).toBe("boom");
+  });
+
+  it("returns null when there is no fatal line (or junk)", () => {
+    expect(extractFailureMessage('{"event":"page.ok"}\nnot json\n')).toBeNull();
+    expect(extractFailureMessage("")).toBeNull();
   });
 });
