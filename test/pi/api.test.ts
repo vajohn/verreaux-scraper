@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleApiRequest, type ApiDeps } from "../../src/pi/api.js";
 import { totp } from "../../src/pi/totp.js";
+import { InMemoryAccountStore } from "../../src/pi/syncStore.js";
 
 const SECRET = "JBSWY3DPEHPK3PXP";
 
@@ -22,17 +23,23 @@ function startServer(deps: ApiDeps): Promise<{ server: Server; base: string }> {
 describe("api", () => {
   let dirs: { jobs: string; done: string; state: string };
   let ctx: { server: Server; base: string };
+  let store: InMemoryAccountStore;
 
   beforeEach(async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-api-"));
     dirs = { jobs: join(root, "jobs"), done: join(root, "done"), state: join(root, "state") };
     for (const d of Object.values(dirs)) mkdirSync(d);
+    store = new InMemoryAccountStore(() => "2026-06-17T00:00:00Z");
     ctx = await startServer({
       dirs,
       secret: SECRET,
       now: () => 1_700_000_000_000,
       newSuffix: () => "abcd",
       corsOrigin: "*",
+      store,
+      verifyOtp: (code: string) => code === "111111",
+      newToken: () => "tok-plain",
+      newId: (() => { let n = 0; return () => `dev-${++n}`; })(),
     });
   });
 
@@ -91,5 +98,44 @@ describe("api", () => {
   it("returns 404 for a run that does not exist", async () => {
     const res = await fetch(`${ctx.base}/runs/nope`);
     expect(res.status).toBe(404);
+  });
+
+  it("enrolls a device (bad OTP -> 401, good OTP -> 201 token)", async () => {
+    const bad = await fetch(`${ctx.base}/enroll`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "u", passcode: "p", otp: "000000", deviceName: "iPad" }),
+    });
+    expect(bad.status).toBe(401);
+    const ok = await fetch(`${ctx.base}/enroll`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "u", passcode: "p", otp: "111111", deviceName: "iPad" }),
+    });
+    expect(ok.status).toBe(201);
+    expect((await ok.json()).deviceToken).toBe("tok-plain");
+  });
+
+  it("rejects sync without a valid bearer token (401)", async () => {
+    const res = await fetch(`${ctx.base}/sync/position`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourceUrl: "https://x/s", chapterOrder: 1, pageIndex: 0, manuallyMarked: false }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("PUT then GET a position with a bearer token", async () => {
+    await fetch(`${ctx.base}/enroll`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "u", passcode: "p", otp: "111111", deviceName: "iPad" }),
+    });
+    const auth = { "content-type": "application/json", authorization: "Bearer tok-plain" };
+    const put = await fetch(`${ctx.base}/sync/position`, {
+      method: "PUT", headers: auth,
+      body: JSON.stringify({ sourceUrl: "https://x/s", chapterOrder: 12, pageIndex: 5, manuallyMarked: false }),
+    });
+    expect(put.status).toBe(200);
+    expect((await put.json()).pageIndex).toBe(5);
+    const get = await fetch(`${ctx.base}/sync/positions`, { headers: { authorization: "Bearer tok-plain" } });
+    expect(get.status).toBe(200);
+    expect((await get.json()).positions).toHaveLength(1);
   });
 });

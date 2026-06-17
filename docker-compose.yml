@@ -23,12 +23,18 @@ services:
       PORT: "8080"
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       SCRAPE_TOTP_SECRET: ${SCRAPE_TOTP_SECRET:?set SCRAPE_TOTP_SECRET in .env}
+      DATABASE_URL: postgres://verreaux:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/verreaux
     volumes:
       - ./data/jobs:/work/jobs
       - ./data/done:/work/done
       - ./data/state:/work/state
     ports:
       - "8080:8080"
+    depends_on:
+      flaresolverr:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     command: ["node", "scripts/pi-api.mjs"]
 
   flaresolverr:
@@ -36,3 +42,20 @@ services:
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: verreaux
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: verreaux
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+    healthcheck:
+      # Lets the api `depends_on: condition: service_healthy` wait for real
+      # readiness instead of crash-looping on a cold boot.
+      test: ["CMD-SHELL", "pg_isready -U verreaux -d verreaux"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { generateJobId, serializeJob, parseJob } from "./job.js";
 import { verifyTotp } from "./totp.js";
 import type { RunnerDirs } from "./runner.js";
+import type { AccountStore } from "./syncStore.js";
+import { handleEnroll, resolveDevice, handlePutPosition, handleGetPositions, type SyncDeps } from "./syncHandlers.js";
 
 export interface ApiDeps {
   dirs: RunnerDirs;
@@ -13,12 +15,18 @@ export interface ApiDeps {
   /** Random id suffix (injectable for deterministic tests). */
   newSuffix: () => string;
   corsOrigin: string;
+  /** Sync backend (omit to disable the /enroll + /sync routes). */
+  store?: AccountStore;
+  verifyOtp?: (code: string) => boolean;
+  newToken?: () => string;
+  newId?: () => string;
 }
 
 function cors(res: ServerResponse, origin: string): void {
   res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  // PUT + authorization are needed by the sync routes; harmless for the others.
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -31,6 +39,23 @@ async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function bearer(req: IncomingMessage): string | null {
+  const h = req.headers["authorization"];
+  if (typeof h !== "string" || !h.startsWith("Bearer ")) return null;
+  return h.slice("Bearer ".length).trim() || null;
+}
+
+function syncDeps(deps: ApiDeps): SyncDeps | null {
+  if (!deps.store || !deps.verifyOtp || !deps.newToken || !deps.newId) return null;
+  return {
+    store: deps.store,
+    verifyOtp: deps.verifyOtp,
+    now: () => new Date(deps.now()).toISOString(),
+    newToken: deps.newToken,
+    newId: deps.newId,
+  };
 }
 
 export async function handleApiRequest(
@@ -118,6 +143,66 @@ export async function handleApiRequest(
       return;
     } catch {
       return json(res, 404, { error: "run not found" });
+    }
+  }
+
+  const sync = syncDeps(deps);
+  if (sync && req.method === "POST" && path === "/enroll") {
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(await readBody(req)) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return json(res, 400, { error: "expected a JSON object body" });
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+    const r = await handleEnroll(
+      {
+        username: String(payload["username"] ?? ""),
+        passcode: String(payload["passcode"] ?? ""),
+        otp: String(payload["otp"] ?? ""),
+        deviceName: String(payload["deviceName"] ?? "device"),
+      },
+      sync,
+    );
+    return json(res, r.status, r.body);
+  }
+
+  // Gate on method+path so a wrong-method request (e.g. GET /sync/position)
+  // falls through to 404 without resolving/touching the device.
+  const isPutPosition = req.method === "PUT" && path === "/sync/position";
+  const isGetPositions = req.method === "GET" && path === "/sync/positions";
+  if (sync && (isPutPosition || isGetPositions)) {
+    const ctx = await resolveDevice(bearer(req), sync);
+    if (!ctx) return json(res, 401, { error: "invalid device token" });
+
+    if (isPutPosition) {
+      let payload: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(await readBody(req)) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return json(res, 400, { error: "expected a JSON object body" });
+        }
+        payload = parsed as Record<string, unknown>;
+      } catch {
+        return json(res, 400, { error: "invalid JSON body" });
+      }
+      const r = await handlePutPosition(
+        ctx,
+        {
+          sourceUrl: String(payload["sourceUrl"] ?? ""),
+          chapterOrder: Number(payload["chapterOrder"]),
+          pageIndex: Number(payload["pageIndex"]),
+          manuallyMarked: !!payload["manuallyMarked"],
+        },
+        sync,
+      );
+      return json(res, r.status, r.body);
+    }
+    if (isGetPositions) {
+      const since = url.searchParams.get("since");
+      const r = await handleGetPositions(ctx, since, sync);
+      return json(res, r.status, r.body);
     }
   }
 
