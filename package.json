@@ -12,7 +12,6 @@
   },
   "bin": {
     "verreaux-scrape": "./dist/cli/index.js",
-    "verreaux-scrape-remote": "./scripts/scrape-remote.mjs",
     "verreaux-scrape-pi": "./scripts/scrape-pi.mjs"
   },
   "scripts": {

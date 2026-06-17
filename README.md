@@ -11,7 +11,7 @@ Multi-source manhwa/manga scraper that produces Verreaux-compatible Type 2 ZIPs 
 | `arenascan.com`                                         | Arenascan   | live-verified  |
 | `drakecomic.org`                                        | Drake Scans | fixture-tested · requires `--allow-headed-cloudflare` |
 | `manhwanex.com`                                         | manhwanex   | Working        |
-| `qimanhwa.com`                                          | qimanhwa    | via GitHub Actions (Zscaler-blocked locally) |
+| `qimanhwa.com`                                          | qimanhwa    | via the Pi service (Zscaler-blocked locally) |
 
 ## Requirements
 
@@ -247,9 +247,9 @@ source and later "update from source."
 Pi, clone the repo to `~/verreaux`, `mkdir -p data/{jobs,done,state}`, put
 `SCRAPE_TOTP_SECRET` in `.env`, then `docker compose build && docker compose up -d`.
 
-> The TOTP-gated GitHub Actions workflow (`scrape-remote.mjs` / `.github/workflows/`)
-> remains as a fallback until the Pi path is validated end-to-end on hardware,
-> after which it is retired.
+> The old TOTP-gated GitHub Actions workflow has been **retired** — the Pi path
+> is validated end-to-end and is now the only way to scrape Zscaler-blocked
+> sources. (`scripts/totp.mjs` is kept; it mints the OTP codes the Pi API expects.)
 
 ## Native build note
 
