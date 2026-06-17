@@ -39,6 +39,13 @@ describe("mergePosition", () => {
     expect(mergePosition(pos(12, 1, "d2"), { chapterOrder: 12.5, pageIndex: 1, manuallyMarked: false, device: "d1" }).changed).toBe(true);
   });
 
+  it("accepts an owner regression across a chapter boundary (ch13 -> ch12)", () => {
+    const current = pos(13, 2, "d2");
+    const r = mergePosition(current, { chapterOrder: 12, pageIndex: 40, manuallyMarked: false, device: "d2" });
+    expect(r.changed).toBe(true);
+    expect(r.value).toEqual({ chapterOrder: 12, pageIndex: 40, ownerDevice: "d2", manuallyMarked: false });
+  });
+
   it("treats an equal position as no change", () => {
     expect(mergePosition(pos(12, 5, "d2"), { chapterOrder: 12, pageIndex: 5, manuallyMarked: false, device: "d1" }).changed).toBe(false);
   });
