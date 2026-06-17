@@ -319,7 +319,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Create: `src/pi/cachePlan.ts`
 - Test: `test/pi/cachePlan.test.ts`
 
-Given a requested `from` and the candidate cached ZIPs for a source URL, pick the single freshest ZIP and the contiguous run of orders it has starting at `from`. Returns the orders to reuse and the narrowed `scrapeFrom`.
+Given a requested `from` and the candidate cached ZIPs (newest-first) for a source URL, pick the freshest ZIP that has **any** order ≥ `from`, reuse all its in-range orders, and compute the disjoint ranges still to scrape: the integer **gaps** within the cached span (including the lower gap `from..firstCached-1`) plus the **tail** above the cached block (`to: "latest"`, always scraped to pick up newer chapters). Returns null when no candidate has anything reusable for the range (caller then scrapes the original range whole).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -330,32 +330,43 @@ import { describe, it, expect } from "vitest";
 import { planCacheReuse } from "../../src/pi/cachePlan.js";
 import type { CachedZip } from "../../src/pi/zipIndex.js";
 
-function zip(orders: number[]): CachedZip {
-  return { runId: "r", zipPath: "/p.zip", seriesFolder: "S", orders: new Set(orders), mtimeMs: 1 };
+function zip(orders: number[], mtimeMs = 1): CachedZip {
+  return { runId: "r", zipPath: "/p.zip", seriesFolder: "S", orders: new Set(orders), mtimeMs };
 }
 
 describe("planCacheReuse", () => {
-  it("reuses the contiguous run from `from` and narrows scrapeFrom past it", () => {
-    const plan = planCacheReuse(49, [zip([49, 50, 51, 52])]);
-    expect(plan).toEqual({ cachedZip: expect.any(Object), reuseOrders: [49, 50, 51, 52], scrapeFrom: 53 });
+  it("contiguous-from-`from`: reuse the block, scrape only the tail", () => {
+    const plan = planCacheReuse(49, [zip([49, 50, 51, 52])])!;
+    expect(plan.reuseOrders).toEqual([49, 50, 51, 52]);
+    expect(plan.scrapeSegments).toEqual([{ from: 53, to: "latest" }]);
   });
 
-  it("stops at the first gap (contiguous only)", () => {
-    const plan = planCacheReuse(49, [zip([49, 50, 52])]); // 51 missing
-    expect(plan!.reuseOrders).toEqual([49, 50]);
-    expect(plan!.scrapeFrom).toBe(51);
+  it("floating chunk above `from`: scrape the lower gap, reuse the chunk, scrape the tail", () => {
+    const plan = planCacheReuse(49, [zip([55, 56, 57, 58])])!; // case 2
+    expect(plan.reuseOrders).toEqual([55, 56, 57, 58]);
+    expect(plan.scrapeSegments).toEqual([
+      { from: 49, to: 54 },     // lower gap
+      { from: 59, to: "latest" }, // tail
+    ]);
   });
 
-  it("returns null when no cached ZIP covers `from`", () => {
-    expect(planCacheReuse(49, [zip([60, 61])])).toBeNull();
+  it("internal hole: scrape just the missing integers plus the tail", () => {
+    const plan = planCacheReuse(49, [zip([49, 50, 52])])!; // 51 missing
+    expect(plan.reuseOrders).toEqual([49, 50, 52]);
+    expect(plan.scrapeSegments).toEqual([
+      { from: 51, to: 51 },
+      { from: 53, to: "latest" },
+    ]);
+  });
+
+  it("cache wholly below `from` (or empty): no reuse", () => {
+    expect(planCacheReuse(49, [zip([20, 30])])).toBeNull();
     expect(planCacheReuse(49, [])).toBeNull();
   });
 
-  it("picks the freshest ZIP that covers `from`", () => {
-    const older = { ...zip([49, 50]), mtimeMs: 1 };
-    const newer = { ...zip([49, 50, 51]), mtimeMs: 2 };
-    // index lists are pre-sorted newest-first; planCacheReuse honors order.
-    expect(planCacheReuse(49, [newer, older])!.reuseOrders).toEqual([49, 50, 51]);
+  it("skips a candidate with nothing in range and uses the next that has some", () => {
+    const plan = planCacheReuse(49, [zip([20, 30]), zip([55, 56])])!;
+    expect(plan.reuseOrders).toEqual([55, 56]);
   });
 });
 ```
@@ -370,30 +381,52 @@ Expected: FAIL — module not found.
 ```ts
 import type { CachedZip } from "./zipIndex.js";
 
+export interface ScrapeSegment {
+  from: number;
+  to: number | "latest";
+}
+
 export interface CacheReusePlan {
   cachedZip: CachedZip;
-  /** Contiguous integer orders, starting at `from`, to copy from the cached ZIP. */
+  /** Cached orders (>= from) to copy into the assembled output. */
   reuseOrders: number[];
-  /** First order to scrape fresh (last reused order + 1). */
-  scrapeFrom: number;
+  /** Disjoint ranges to scrape fresh: integer gaps within the cached span,
+   *  then the tail above it (`to: "latest"`). */
+  scrapeSegments: ScrapeSegment[];
 }
 
 /**
- * From the candidate cached ZIPs (newest-first), pick the first that contains
- * `from` and take its contiguous run of orders from `from` upward. Reuse only
- * whole-integer steps so the narrowed scrape range is unambiguous. Returns null
- * when no candidate covers `from` (caller then scrapes the original range).
+ * From the candidate cached ZIPs (newest-first), pick the first that has any
+ * order >= `from`. Reuse all its in-range orders; scrape the integer gaps
+ * between `from` and the highest cached order, plus the tail above it. Returns
+ * null when no candidate has anything reusable (caller scrapes the original
+ * range). `from` is always an integer here (parseFromArg only matches `\d+`).
  */
 export function planCacheReuse(from: number, candidates: CachedZip[]): CacheReusePlan | null {
   for (const cachedZip of candidates) {
-    if (!cachedZip.orders.has(from)) continue;
-    const reuseOrders: number[] = [];
-    let next = from;
-    while (cachedZip.orders.has(next)) {
-      reuseOrders.push(next);
-      next += 1;
+    const inRange = [...cachedZip.orders].filter((o) => o >= from).sort((a, b) => a - b);
+    if (inRange.length === 0) continue;
+    const floorE = Math.floor(inRange[inRange.length - 1]!);
+    const present = new Set(inRange);
+    const segments: ScrapeSegment[] = [];
+
+    // Integer gaps within [from .. floorE] — includes the lower gap
+    // [from .. firstCached-1] when the cached block floats above `from`.
+    let gapStart: number | null = null;
+    for (let k = from; k <= floorE; k++) {
+      const missing = !present.has(k);
+      if (missing && gapStart === null) gapStart = k;
+      if (!missing && gapStart !== null) {
+        segments.push({ from: gapStart, to: k - 1 });
+        gapStart = null;
+      }
     }
-    return { cachedZip, reuseOrders, scrapeFrom: next };
+    if (gapStart !== null) segments.push({ from: gapStart, to: floorE });
+
+    // Tail above the cached block — always scraped to catch newer chapters.
+    segments.push({ from: floorE + 1, to: "latest" });
+
+    return { cachedZip, reuseOrders: inRange, scrapeSegments: segments };
   }
   return null;
 }
@@ -409,20 +442,20 @@ Expected: PASS.
 ```bash
 cd /Users/JLAJ9408/Documents/Verreaux/scraper
 git add src/pi/cachePlan.ts test/pi/cachePlan.test.ts
-git commit -m "feat(pi): pure cache-reuse range planner
+git commit -m "feat(pi): gap-filling cache-reuse range planner
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 4: Assemble output ZIP from cached chapters + delta
+### Task 4: Assemble output ZIP from cached chapters + delta(s)
 
 **Files:**
 - Create: `src/pi/zipAssemble.ts`
 - Test: `test/pi/zipAssemble.test.ts`
 
-Writes a combined `output.zip`: the reused chapters copied from the cached ZIP + every chapter from the delta scrape's ZIP + a recomputed root `verreaux.json`. Delta wins on any overlapping chapter folder. The cover is taken from the delta if present, else the cached ZIP.
+Writes a combined `output.zip`: the reused chapters copied from the cached ZIP + every chapter from each delta scrape ZIP + a recomputed root `verreaux.json`. Delta chapters win on any overlapping folder. The cover is taken from a delta if present, else the cached ZIP.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -447,41 +480,49 @@ function makeZip(path: string, folder: string, orders: number[], withCover = fal
   zip.writeZip(path);
 }
 
+function chaptersOf(zipPath: string): string[] {
+  return [...new Set(new AdmZip(zipPath).getEntries()
+    .map((e) => e.entryName.split("/")[1])
+    .filter((n): n is string => !!n && n.startsWith("chapter-")))].sort();
+}
+
 describe("assembleOutputZip", () => {
   let dir: string;
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "asm-")); });
 
-  it("merges reused cached chapters + delta chapters with a recomputed manifest", async () => {
+  it("merges reused cached chapters + multiple delta ZIPs with a recomputed manifest", async () => {
     const cached = join(dir, "cached.zip");
-    const delta = join(dir, "delta.zip");
-    makeZip(cached, "S", [49, 50, 51], true);
-    makeZip(delta, "S", [52, 53]);
+    const d1 = join(dir, "d1.zip");
+    const d2 = join(dir, "d2.zip");
+    makeZip(cached, "S", [55, 56, 57, 58], true); // floating cached chunk
+    makeZip(d1, "S", [49, 50, 51, 52, 53, 54]);    // lower-gap delta
+    makeZip(d2, "S", [59, 60]);                     // tail delta
     const outPath = join(dir, "output");
 
     await assembleOutputZip({
-      cachedZipPath: cached, seriesFolder: "S", reuseOrders: [49, 50, 51],
-      deltaZipPath: delta, outPath, from: 49,
+      cachedZipPath: cached, seriesFolder: "S", reuseOrders: [55, 56, 57, 58],
+      deltaZipPaths: [d1, d2], outPath, from: 49,
     });
 
-    const result = new AdmZip(`${outPath}.zip`);
-    const chapters = new Set(result.getEntries().map((e) => e.entryName.split("/")[1]).filter((n) => n && n.startsWith("chapter-")));
-    expect([...chapters].sort()).toEqual(["chapter-49", "chapter-50", "chapter-51", "chapter-52", "chapter-53"]);
-    const manifest = JSON.parse(result.getEntry("verreaux.json")!.getData().toString("utf8"));
-    expect(manifest.chapterRange).toEqual({ from: 49, to: 53 });
-    expect(result.getEntry("S/cover.webp")).toBeTruthy(); // carried from cached
+    expect(chaptersOf(`${outPath}.zip`)).toEqual(
+      ["chapter-49","chapter-50","chapter-51","chapter-52","chapter-53","chapter-54","chapter-55","chapter-56","chapter-57","chapter-58","chapter-59","chapter-60"],
+    );
+    const manifest = JSON.parse(new AdmZip(`${outPath}.zip`).getEntry("verreaux.json")!.getData().toString("utf8"));
+    expect(manifest.chapterRange).toEqual({ from: 49, to: 60 });
+    expect(new AdmZip(`${outPath}.zip`).getEntry("S/cover.webp")).toBeTruthy(); // carried from cached
   });
 
-  it("works with no delta (cached-only window) when the delta path is null", async () => {
+  it("works with no deltas (cached window alone)", async () => {
     const cached = join(dir, "cached.zip");
     makeZip(cached, "S", [49, 50], true);
     const outPath = join(dir, "output");
     await assembleOutputZip({
       cachedZipPath: cached, seriesFolder: "S", reuseOrders: [49, 50],
-      deltaZipPath: null, outPath, from: 49,
+      deltaZipPaths: [], outPath, from: 49,
     });
-    const result = new AdmZip(`${outPath}.zip`);
-    const manifest = JSON.parse(result.getEntry("verreaux.json")!.getData().toString("utf8"));
+    const manifest = JSON.parse(new AdmZip(`${outPath}.zip`).getEntry("verreaux.json")!.getData().toString("utf8"));
     expect(manifest.chapterRange).toEqual({ from: 49, to: 50 });
+    expect(chaptersOf(`${outPath}.zip`)).toEqual(["chapter-49", "chapter-50"]);
   });
 });
 ```
@@ -503,10 +544,10 @@ const AdmZip = _require("adm-zip") as typeof import("adm-zip");
 export interface AssembleOpts {
   cachedZipPath: string;
   seriesFolder: string;
-  /** Whole-integer orders to copy from the cached ZIP. */
+  /** Whole orders to copy from the cached ZIP. */
   reuseOrders: number[];
-  /** Delta scrape output, or null when there were no new chapters. */
-  deltaZipPath: string | null;
+  /** Zero or more delta scrape outputs (disjoint ranges). Delta wins on overlap. */
+  deltaZipPaths: string[];
   /** Output path WITHOUT the `.zip` extension. */
   outPath: string;
   /** Original requested `from`, recorded in the recomputed manifest. */
@@ -532,12 +573,13 @@ export async function assembleOutputZip(opts: AssembleOpts): Promise<void> {
   let maxOrder = opts.from;
   let manifestTemplate: Record<string, unknown> | null = null;
 
-  // Delta first so its chapters take precedence on any overlap.
-  if (opts.deltaZipPath) {
-    const delta = new AdmZip(opts.deltaZipPath);
+  // Deltas first so their chapters take precedence on any overlap. The deltas
+  // are disjoint ranges, so order among them does not matter.
+  for (const deltaPath of opts.deltaZipPaths) {
+    const delta = new AdmZip(deltaPath);
     for (const e of delta.getEntries()) {
       if (e.entryName === "verreaux.json") {
-        manifestTemplate = JSON.parse(e.getData().toString("utf8")) as Record<string, unknown>;
+        if (!manifestTemplate) manifestTemplate = JSON.parse(e.getData().toString("utf8")) as Record<string, unknown>;
         continue;
       }
       const m = e.entryName.match(CHAPTER_RE);
@@ -545,12 +587,11 @@ export async function assembleOutputZip(opts: AssembleOpts): Promise<void> {
         seenChapters.add(m[2]!);
         maxOrder = Math.max(maxOrder, orderOf(m[2]!));
       }
-      out.addFile(e.entryName, e.getData());
+      if (!out.getEntry(e.entryName)) out.addFile(e.entryName, e.getData());
     }
   }
 
-  // Reused cached chapters: only the planned orders, and only folders the delta
-  // did not already supply.
+  // Reused cached chapters: only the planned orders, only folders no delta gave.
   const reuse = new Set(opts.reuseOrders);
   const cached = new AdmZip(opts.cachedZipPath);
   for (const e of cached.getEntries()) {
@@ -561,13 +602,13 @@ export async function assembleOutputZip(opts: AssembleOpts): Promise<void> {
     const m = e.entryName.match(CHAPTER_RE);
     if (m) {
       const folder = m[2]!;
-      if (seenChapters.has(folder)) continue; // delta already provided it
-      if (!reuse.has(orderOf(folder))) continue; // not in the reuse plan
+      if (seenChapters.has(folder)) continue;     // a delta already provided it
+      if (!reuse.has(orderOf(folder))) continue;   // not in the reuse plan
       maxOrder = Math.max(maxOrder, orderOf(folder));
       out.addFile(e.entryName, e.getData());
       continue;
     }
-    // Non-chapter entries (e.g. cover) — carry only if the delta didn't add one.
+    // Non-chapter entry (e.g. cover) — carry only if no delta already added one.
     if (!out.getEntry(e.entryName)) out.addFile(e.entryName, e.getData());
   }
 
@@ -579,7 +620,6 @@ export async function assembleOutputZip(opts: AssembleOpts): Promise<void> {
     chapterRange: { from: opts.from, to: maxOrder },
     generatedAt: (manifestTemplate?.["generatedAt"] as string) ?? "",
   };
-  // Replace any copied manifest with the recomputed one.
   if (out.getEntry("verreaux.json")) out.deleteFile("verreaux.json");
   out.addFile("verreaux.json", Buffer.from(JSON.stringify(manifest, null, 2)));
 
@@ -599,7 +639,7 @@ Expected: PASS.
 ```bash
 cd /Users/JLAJ9408/Documents/Verreaux/scraper
 git add src/pi/zipAssemble.ts test/pi/zipAssemble.test.ts
-git commit -m "feat(pi): assemble output ZIP from cached chapters + delta scrape
+git commit -m "feat(pi): assemble output ZIP from cached chapters + delta scrapes
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -613,11 +653,11 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - Modify: `scripts/pi-watcher.mjs` (use it in the `runScrape` dep)
 - Test: `test/pi/cacheAssist.test.ts`
 
-`cacheAssist` decides whether to narrow + assemble. It is injected with a `scrape(argsOverride, outDir)` callback (the worker passes the real CLI spawn) so it is testable without spawning.
+`cacheAssist` plans reuse, runs **one scrape per gap/tail segment** into its own temp dir, then assembles the cached reuse + every delta into `outDir/output.zip`. It is injected with a `scrape(extraArgs, outDir)` callback (the worker passes the real CLI spawn) so it is testable without spawning.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/pi/cacheAssist.test.ts`. A fake `scrape` callback writes a delta ZIP, so we exercise narrowing + assembly without the CLI:
+Create `test/pi/cacheAssist.test.ts`. The fake `scrape` reads `--from/--to` from the argv and emits a delta ZIP for that range, so we exercise the full multi-segment plan + assembly:
 
 ```ts
 import { describe, it, expect, beforeEach } from "vitest";
@@ -625,7 +665,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import AdmZip from "adm-zip";
-import { runScrapeWithCache } from "../../src/pi/cacheAssist.js";
+import { runScrapeWithCache, parseFromArg } from "../../src/pi/cacheAssist.js";
 
 function writeRunZip(doneDir: string, runId: string, orders: number[]): void {
   mkdirSync(join(doneDir, runId), { recursive: true });
@@ -638,54 +678,94 @@ function writeRunZip(doneDir: string, runId: string, orders: number[]): void {
   zip.writeZip(join(doneDir, runId, "output.zip"));
 }
 
+function chaptersOf(zipPath: string): string[] {
+  return [...new Set(new AdmZip(zipPath).getEntries()
+    .map((e) => e.entryName.split("/")[1])
+    .filter((n): n is string => !!n && n.startsWith("chapter-")))].sort();
+}
+
+/** Fake scrape: emit chapters for the requested [--from .. --to] range. `latest`
+ *  is treated as `LATEST`. Empty range -> no zip, non-zero exit (like ERR_EMPTY_RANGE). */
+function fakeScrape(LATEST: number, calls: string[][]) {
+  return async (extraArgs: string[], dir: string): Promise<number> => {
+    calls.push(extraArgs);
+    const fi = extraArgs.indexOf("--from");
+    const ti = extraArgs.indexOf("--to");
+    const from = parseInt(extraArgs[fi + 1]!, 10);
+    const toRaw = extraArgs[ti + 1]!;
+    const to = toRaw === "latest" ? LATEST : parseInt(toRaw, 10);
+    if (from > to) return 1; // empty range
+    const zip = new AdmZip();
+    zip.addFile("verreaux.json", Buffer.from(JSON.stringify({
+      schema: 1, sourceUrl: "https://x/s", seriesTitle: "S", adapter: "a",
+      chapterRange: { from, to: toRaw === "latest" ? "latest" : to }, generatedAt: "t",
+    })));
+    for (let o = from; o <= to; o++) zip.addFile(`S/chapter-${o}/001.webp`, Buffer.from(`p${o}`));
+    zip.writeZip(join(dir, "output.zip"));
+    return 0;
+  };
+}
+
 describe("runScrapeWithCache", () => {
   let doneDir: string;
   beforeEach(() => { doneDir = mkdtempSync(join(tmpdir(), "ca-")); });
 
-  it("narrows the scrape past cached chapters and assembles a full output", async () => {
-    writeRunZip(doneDir, "20260101-000000-aaaa", [49, 50, 51]); // cached
+  it("parseFromArg reads the integer --from", () => {
+    expect(parseFromArg("--from 49 --to latest")).toBe(49);
+    expect(parseFromArg("--to latest")).toBeNull();
+  });
+
+  it("floating cached chunk: scrapes lower gap + tail, reuses the chunk (case 2)", async () => {
+    writeRunZip(doneDir, "20260101-000000-aaaa", [55, 56, 57, 58]); // cached
     const outDir = join(doneDir, "20260102-000000-bbbb");
     mkdirSync(outDir, { recursive: true });
-    let scrapedArgs: string[] | null = null;
+    const calls: string[][] = [];
 
     const exit = await runScrapeWithCache({
       job: { id: "20260102-000000-bbbb", type: "scrape", url: "https://x/s", args: "--from 49 --to latest" },
-      outDir, doneDir,
-      scrape: async (extraArgs, deltaOutDir) => {
-        scrapedArgs = extraArgs;
-        const zip = new AdmZip();
-        zip.addFile("verreaux.json", Buffer.from(JSON.stringify({
-          schema: 1, sourceUrl: "https://x/s", seriesTitle: "S", adapter: "a",
-          chapterRange: { from: 52, to: "latest" }, generatedAt: "t",
-        })));
-        zip.addFile("S/chapter-52/001.webp", Buffer.from("p52"));
-        zip.writeZip(join(deltaOutDir, "output.zip"));
-        return 0;
-      },
+      outDir, doneDir, scrape: fakeScrape(60, calls),
     });
 
     expect(exit).toBe(0);
-    expect(scrapedArgs).toEqual(["--from", "52", "--to", "latest"]); // narrowed
-    const result = new AdmZip(join(outDir, "output.zip"));
-    const chapters = new Set(result.getEntries().map((e) => e.entryName.split("/")[1]).filter((n) => n?.startsWith("chapter-")));
-    expect([...chapters].sort()).toEqual(["chapter-49", "chapter-50", "chapter-51", "chapter-52"]);
+    expect(calls).toEqual([
+      ["--from", "49", "--to", "54"],     // lower gap
+      ["--from", "59", "--to", "latest"], // tail
+    ]);
+    expect(chaptersOf(join(outDir, "output.zip"))).toEqual(
+      ["chapter-49","chapter-50","chapter-51","chapter-52","chapter-53","chapter-54","chapter-55","chapter-56","chapter-57","chapter-58","chapter-59","chapter-60"],
+    );
   });
 
-  it("falls back to a plain scrape (original args, no assembly) when nothing is cached", async () => {
-    const outDir = join(doneDir, "20260102-000000-cccc");
+  it("contiguous cache with no newer chapters: empty tail -> serve cached window alone (case 3)", async () => {
+    writeRunZip(doneDir, "20260101-000000-aaaa", [49, 50, 51]); // cached up to latest
+    const outDir = join(doneDir, "20260102-000000-bbbb");
     mkdirSync(outDir, { recursive: true });
-    let scrapedArgs: string[] | null = null;
+    const calls: string[][] = [];
+
     const exit = await runScrapeWithCache({
-      job: { id: "20260102-000000-cccc", type: "scrape", url: "https://x/s", args: "--from 49 --to latest" },
-      outDir, doneDir,
-      scrape: async (extraArgs, deltaOutDir) => {
-        scrapedArgs = extraArgs;
-        new AdmZip().writeZip(join(deltaOutDir, "output.zip")); // (content irrelevant here)
-        return 0;
-      },
+      job: { id: "20260102-000000-bbbb", type: "scrape", url: "https://x/s", args: "--from 49 --to latest" },
+      outDir, doneDir, scrape: fakeScrape(51, calls), // LATEST = 51, so tail 52..51 is empty
     });
+
     expect(exit).toBe(0);
-    expect(scrapedArgs).toEqual(["--from", "49", "--to", "latest"]); // unchanged
+    expect(calls).toEqual([["--from", "52", "--to", "latest"]]); // tail only, returns empty
+    expect(chaptersOf(join(outDir, "output.zip"))).toEqual(["chapter-49", "chapter-50", "chapter-51"]);
+  });
+
+  it("cache wholly below `from`: plain scrape of the original range, no assembly (case 1)", async () => {
+    writeRunZip(doneDir, "20260101-000000-aaaa", [20, 30]); // ignored
+    const outDir = join(doneDir, "20260102-000000-bbbb");
+    mkdirSync(outDir, { recursive: true });
+    const calls: string[][] = [];
+
+    const exit = await runScrapeWithCache({
+      job: { id: "20260102-000000-bbbb", type: "scrape", url: "https://x/s", args: "--from 49 --to latest" },
+      outDir, doneDir, scrape: fakeScrape(52, calls),
+    });
+
+    expect(exit).toBe(0);
+    expect(calls).toEqual([["--from", "49", "--to", "latest"]]); // original args, into outDir
+    expect(chaptersOf(join(outDir, "output.zip"))).toEqual(["chapter-49","chapter-50","chapter-51","chapter-52"]);
   });
 });
 ```
@@ -698,18 +778,26 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement `src/pi/cacheAssist.ts`**
 
 ```ts
-import { mkdtemp, rm, rename, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ScrapeJob } from "./job.js";
 import { indexDoneZips } from "./zipIndex.js";
-import { planCacheReuse } from "./cachePlan.js";
+import { planCacheReuse, type ScrapeSegment } from "./cachePlan.js";
 import { assembleOutputZip } from "./zipAssemble.js";
 
-/** Parse `--from N` out of a job's arg string. Returns null if absent/non-int. */
+/** Parse `--from N` out of a job's arg string. Null if absent/non-integer. */
 export function parseFromArg(args: string): number | null {
   const m = args.match(/--from\s+(\d+)\b/);
   return m ? parseInt(m[1]!, 10) : null;
+}
+
+/** Rebuild the job's argv for one scrape segment (override --from / --to). */
+function segmentArgs(jobArgs: string, seg: ScrapeSegment): string[] {
+  let s = jobArgs;
+  s = /--from\s+\S+/.test(s) ? s.replace(/--from\s+\S+/, `--from ${seg.from}`) : `${s} --from ${seg.from}`;
+  s = /--to\s+\S+/.test(s) ? s.replace(/--to\s+\S+/, `--to ${seg.to}`) : `${s} --to ${seg.to}`;
+  return s.trim().split(/\s+/);
 }
 
 export interface CacheAssistDeps {
@@ -718,78 +806,68 @@ export interface CacheAssistDeps {
   outDir: string;
   /** The done/ root, used as the cache. */
   doneDir: string;
-  /**
-   * Runs the real scrape with the given EXTRA argv tokens, writing its
-   * output.zip into `deltaOutDir`. Resolves with the process exit code.
-   */
-  scrape: (extraArgs: string[], deltaOutDir: string) => Promise<number>;
+  /** Runs the real scrape with the given EXTRA argv, writing output.zip into the
+   *  given dir. Resolves with the process exit code. */
+  scrape: (extraArgs: string[], outDir: string) => Promise<number>;
 }
 
 /**
  * Run a scrape, reusing chapters from a recent cached run ZIP when possible.
- * When the cache covers `[from..K]`, scrape only `--from K+1 --to latest` into a
- * temp dir, then assemble the cached window + delta into `outDir/output.zip`.
- * Falls back to a plain scrape (original args, no assembly) when nothing is
- * cached, the job has no integer `--from`, or it is a probe.
+ * Scrapes one segment (gap or tail) per disjoint range the cache does not
+ * cover, then assembles the cached reuse + every produced delta into
+ * `outDir/output.zip`. Falls back to a single plain scrape (original args,
+ * straight into outDir, no assembly) when nothing is cached, the job has no
+ * integer `--from`, or it is a probe.
+ *
+ * Best-effort on segment failures: a segment that produces no output.zip (e.g.
+ * ERR_EMPTY_RANGE on the tail, locked early chapters, or a transient error) is
+ * skipped; the run still succeeds with the reuse + whatever deltas landed, and
+ * the device re-syncs later to fill any remaining gap.
  */
 export async function runScrapeWithCache(deps: CacheAssistDeps): Promise<number> {
   const { job, outDir, doneDir, scrape } = deps;
-  const from = job.type === "scrape" ? parseFromArg(job.args) : null;
-
   const origExtra = job.args.trim() ? job.args.trim().split(/\s+/) : [];
-  if (from === null) {
-    return scrape(origExtra, outDir); // nothing to narrow — scrape straight into outDir
-  }
+
+  const from = job.type === "scrape" ? parseFromArg(job.args) : null;
+  if (from === null) return scrape(origExtra, outDir);
 
   const index = await indexDoneZips(doneDir);
   const plan = planCacheReuse(from, index.get(job.url) ?? []);
-  if (!plan) {
-    return scrape(origExtra, outDir);
-  }
+  if (!plan) return scrape(origExtra, outDir);
 
-  // Scrape only the new tail into a temp dir.
-  const deltaDir = await mkdtemp(join(tmpdir(), "verreaux-delta-"));
+  const segDirs: string[] = [];
   try {
-    const narrowed = job.args.replace(/--from\s+\d+/, `--from ${plan.scrapeFrom}`).trim().split(/\s+/);
-    const exit = await scrape(narrowed, deltaDir);
-    const deltaZip = join(deltaDir, "output.zip");
-    const hasDelta = await stat(deltaZip).then(() => true).catch(() => false);
-
-    // ERR_EMPTY_RANGE (no new chapters) is a non-zero exit with no delta zip;
-    // that is fine — serve the cached window alone. A non-zero exit WITH no
-    // delta and a cache miss would have returned above, so here we still have a
-    // usable cached window to assemble.
-    if (exit !== 0 && !hasDelta) {
-      await assembleOutputZip({
-        cachedZipPath: plan.cachedZip.zipPath, seriesFolder: plan.cachedZip.seriesFolder,
-        reuseOrders: plan.reuseOrders, deltaZipPath: null, outPath: join(outDir, "output"), from,
-      });
-      return 0;
+    const deltaZips: string[] = [];
+    for (const seg of plan.scrapeSegments) {
+      const dir = await mkdtemp(join(tmpdir(), "verreaux-delta-"));
+      segDirs.push(dir);
+      await scrape(segmentArgs(job.args, seg), dir);
+      const z = join(dir, "output.zip");
+      if (await stat(z).then(() => true).catch(() => false)) deltaZips.push(z);
     }
-    if (exit !== 0) return exit; // a real scrape failure with partial output — surface it
-
     await assembleOutputZip({
-      cachedZipPath: plan.cachedZip.zipPath, seriesFolder: plan.cachedZip.seriesFolder,
-      reuseOrders: plan.reuseOrders, deltaZipPath: hasDelta ? deltaZip : null,
-      outPath: join(outDir, "output"), from,
+      cachedZipPath: plan.cachedZip.zipPath,
+      seriesFolder: plan.cachedZip.seriesFolder,
+      reuseOrders: plan.reuseOrders,
+      deltaZipPaths: deltaZips,
+      outPath: join(outDir, "output"),
+      from,
     });
     return 0;
   } finally {
-    await rm(deltaDir, { recursive: true, force: true }).catch(() => undefined);
+    for (const d of segDirs) await rm(d, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 ```
 
-Note: `rename` and the `outDir`'s own `output.zip` — `assembleOutputZip` writes `<outPath>.zip` atomically, and `outPath = join(outDir, "output")`, so the final lands at `outDir/output.zip` exactly where `GET /runs/:id/output.zip` looks.
-
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd /Users/JLAJ9408/Documents/Verreaux/scraper && npx vitest run test/pi/cacheAssist.test.ts`
-Expected: PASS.
+Expected: PASS (all four cases).
 
 - [ ] **Step 5: Wire it into `scripts/pi-watcher.mjs`**
 
-The current `runScrape` dep spawns the CLI directly into `outDir`. Refactor it to delegate to `runScrapeWithCache`, passing a `scrape(extraArgs, deltaOutDir)` callback that performs the existing spawn into the given dir. Replace the `runScrape:` property in the `deps` object with:
+The current `runScrape` dep spawns the CLI directly into `outDir`. Refactor it to delegate to `runScrapeWithCache`, passing a `scrape(extraArgs, dir)` callback that performs the existing spawn into the given dir. Replace the `runScrape:` property in the `deps` object with:
 
 ```js
 import { runScrapeWithCache } from "../dist/pi/cacheAssist.js";
@@ -809,7 +887,8 @@ import { runScrapeWithCache } from "../dist/pi/cacheAssist.js";
         child.on("close", (code) => resolve(code ?? 1));
         child.on("error", (err) => { log.write(`spawn error: ${err.message}\n`); resolve(1); });
       });
-    // Probes never use the cache; scrapes route through cache-assist.
+    // Probes never use the cache; scrapes route through cache-assist (which may
+    // call spawnScrape once per gap/tail segment).
     const result =
       job.type === "probe"
         ? spawnScrape([], outDir)
@@ -818,7 +897,7 @@ import { runScrapeWithCache } from "../dist/pi/cacheAssist.js";
   },
 ```
 
-(`spawnScrape` may run more than once across a single job in theory; it does not here — exactly one scrape per `runScrapeWithCache`. `{ end: false }` keeps the shared log stream open until the wrapper closes it.)
+(`{ end: false }` keeps the shared log stream open across the multiple segment spawns; the wrapper closes it once when the whole job resolves.)
 
 - [ ] **Step 6: Typecheck + run the Pi test suite**
 
@@ -830,11 +909,11 @@ Expected: typecheck clean; all Pi tests pass.
 ```bash
 cd /Users/JLAJ9408/Documents/Verreaux/scraper
 git add src/pi/cacheAssist.ts scripts/pi-watcher.mjs test/pi/cacheAssist.test.ts
-git commit -m "feat(pi): cache-assisted scraping reuses recent run ZIPs
+git commit -m "feat(pi): cache-assisted scraping reuses recent run ZIPs (gap-filling)
 
-A catch-up scrape narrows --from past chapters already in a recent done/
-ZIP for the same source and assembles cached + freshly-scraped chapters,
-so overlapping chapters are not re-fetched from the source site.
+A catch-up scrape reuses in-range chapters from a recent done/ ZIP for the
+same source and scrapes only the gaps + the tail, then assembles them, so
+overlapping chapters are not re-fetched from the source site.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -843,12 +922,16 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Self-Review
 
-- **Spec coverage:** Task 1 covers the auth item ("extend `POST /scrape` to also accept `Authorization: Bearer <deviceToken>`, reusing `resolveDevice`; OTP path stays"). Tasks 2-5 cover the added Pi-side ZIP-reuse design (index `done/` ZIPs → plan contiguous reuse → narrow scrape → assemble). ✓
+- **Spec coverage:** Task 1 covers the auth item ("extend `POST /scrape` to also accept `Authorization: Bearer <deviceToken>`, reusing `resolveDevice`; OTP path stays"). Tasks 2-5 cover the Pi-side ZIP-reuse design with full **gap-filling** (index `done/` ZIPs → plan in-range reuse + gap/tail segments → scrape each segment → assemble). ✓
+- **User's three cases:**
+  - `cache 20–30, from 49` → no order ≥ 49 → `planCacheReuse` null → plain scrape `49..latest`, cache ignored. ✓
+  - `cache 55–58, from 49` → reuse `55–58`, scrape `49–54` + `59..latest`, assemble. ✓
+  - `cache 45..latest, from 49` → reuse `49..e`, scrape tail `e+1..latest` (empty if no newer) → serve `49..latest`; device prunes below 49 on its initial catch-up. ✓ (Pi trims 45–48 itself; more correct than literal "use as-is" because the tail scrape also catches chapters published since the cache.)
 - **Placeholder scan:** None.
-- **Type consistency:** `CachedZip` (Task 2) is consumed unchanged by `planCacheReuse` (Task 3) and `assembleOutputZip`/`cacheAssist` (Tasks 4-5). `CacheReusePlan.{cachedZip,reuseOrders,scrapeFrom}` are read identically in Task 5. `runScrapeWithCache`'s `scrape(extraArgs, deltaOutDir)` callback shape matches the `spawnScrape` the worker passes. ✓
-- **Edge — sync disabled:** Task 1 — `sync` null → token path skipped → OTP-only, as today. ✓
-- **Edge — no cache / no `--from` / probe:** Task 5 — `runScrapeWithCache` returns a plain scrape into `outDir`, identical to current behavior. ✓
-- **Edge — no new chapters (`ERR_EMPTY_RANGE`):** Task 5 — assembles the cached window alone and succeeds. ✓
-- **Correctness assumption:** chapter images are immutable per `(sourceUrl, order)`; a within-TTL re-upload at the source is not refreshed (documented trade-off). ✓
-- **Atomicity:** `assembleOutputZip` writes `.tmp` then renames, matching the packager's contract; `GET /runs/:id/output.zip` only ever sees a complete file. ✓
-- **Independence:** Tasks 2-5 do not touch the scraper pipeline or `processJob`; they wrap the spawn in the (untested) `.mjs` worker via a tested TS orchestrator. Task 1 is independent of all of them. ✓
+- **Type consistency:** `CachedZip` (Task 2) → `planCacheReuse` (Task 3) → `assembleOutputZip` / `runScrapeWithCache` (Tasks 4-5). `CacheReusePlan.{cachedZip,reuseOrders,scrapeSegments}` and `ScrapeSegment.{from,to}` are read identically in Task 5. `assembleOutputZip` takes `deltaZipPaths: string[]`; `runScrapeWithCache` builds that array. The `scrape(extraArgs, dir)` callback shape matches the worker's `spawnScrape`. ✓
+- **Edge — sync disabled:** Task 1 — `sync` null → token path skipped → OTP-only. ✓
+- **Edge — no cache / no integer `--from` / probe:** Task 5 — single plain scrape into `outDir`, identical to current behavior. ✓
+- **Edge — empty/failed segment:** skipped; run still assembles reuse + landed deltas and succeeds; device re-syncs to fill any residual gap (documented best-effort trade-off — avoids wrongly failing on locked early chapters, which legitimately return ERR_EMPTY_RANGE). ✓
+- **Correctness assumption:** chapter images are immutable per `(sourceUrl, order)`; a within-TTL re-upload at the source is not refreshed (documented). ✓
+- **Atomicity:** `assembleOutputZip` writes `.tmp` then renames; `GET /runs/:id/output.zip` only ever sees a complete file. ✓
+- **Independence:** Tasks 2-5 do not touch the scraper pipeline or `processJob`; they wrap the spawn via a tested TS orchestrator. Task 1 is independent. ✓
