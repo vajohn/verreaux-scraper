@@ -12,15 +12,19 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-# Install deps first for layer caching.
-COPY package.json package-lock.json ./
-RUN npm ci
-
-# Build the TypeScript (produces dist/cli/* and dist/pi/*).
-COPY tsconfig.json tsconfig.build.json ./
+# package.json declares a "prepare" lifecycle script (npm run build) that npm
+# runs automatically during `npm ci`. So the TS build inputs (tsconfig + src +
+# scripts) MUST be present before `npm ci`, or prepare fails with
+# "TS5058: The specified path does not exist: 'tsconfig.build.json'".
+# Copying source here means a code change busts the deps cache layer — an
+# acceptable trade-off on a rarely-rebuilt Pi for a correct build.
+COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 COPY src ./src
 COPY scripts ./scripts
-RUN npm run build
+
+# `npm ci` installs deps, compiles native addons (better-sqlite3, sharp), and
+# runs "prepare" -> `npm run build`, producing dist/cli/* and dist/pi/*.
+RUN npm ci
 
 # No `playwright install` here: the v1.60.0-jammy base image already ships the
 # matching Chromium, so re-running it only adds a build-time network call.
