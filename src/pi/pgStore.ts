@@ -72,7 +72,10 @@ export class PgAccountStore implements AccountStore {
   }
   async touchDevice(accountId: string, deviceId: string): Promise<void> {
     await this.pool.query(
-      `UPDATE accounts SET devices = (SELECT jsonb_agg(CASE WHEN d->>'id'=$2 THEN jsonb_set(d,'{lastSeenAt}', to_jsonb(now()::text)) ELSE d END) FROM jsonb_array_elements(devices) d) WHERE id=$1`,
+      // lastSeenAt is written as an ISO-8601 UTC string to match the Device
+      // interface + InMemoryAccountStore (now()::text would be a space-separated,
+      // local-tz format). updated_at bumped to match addDevice/removeDevice.
+      `UPDATE accounts SET devices = (SELECT jsonb_agg(CASE WHEN d->>'id'=$2 THEN jsonb_set(d,'{lastSeenAt}', to_jsonb(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))) ELSE d END) FROM jsonb_array_elements(devices) d), updated_at=now() WHERE id=$1`,
       [accountId, deviceId],
     );
   }
