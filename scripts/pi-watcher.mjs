@@ -3,17 +3,35 @@
 // time via the tested processJob core, spawning the built CLI for real scrapes.
 import chokidar from "chokidar";
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, renameSync, readdirSync } from "node:fs";
+import { createWriteStream, existsSync, renameSync, readdirSync, statSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processJob } from "../dist/pi/runner.js";
+import { expiredRunDirs } from "../dist/pi/retention.js";
 
 const ROOT = process.env.VERREAUX_ROOT ?? "/work";
 const dirs = { jobs: join(ROOT, "jobs"), done: join(ROOT, "done"), state: join(ROOT, "state") };
 const FLARESOLVERR = process.env.FLARESOLVERR_URL ?? "http://flaresolverr:8191/v1";
+// Output ZIPs are large; keep each completed run only long enough to download/
+// sync it to other devices (default 1 day). Pruned on startup + hourly.
+const DONE_TTL_MS = Number(process.env.DONE_TTL_HOURS ?? 24) * 3600 * 1000;
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, "..", "dist", "cli", "index.js");
+
+function pruneOldRuns() {
+  try {
+    const entries = readdirSync(dirs.done, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => ({ name: d.name, mtimeMs: statSync(join(dirs.done, d.name)).mtimeMs }));
+    for (const name of expiredRunDirs(entries, Date.now(), DONE_TTL_MS)) {
+      rmSync(join(dirs.done, name), { recursive: true, force: true });
+      console.log(`[pi-watcher] pruned expired run ${name}`);
+    }
+  } catch (err) {
+    console.error("[pi-watcher] prune error:", err);
+  }
+}
 
 const deps = {
   now: () => new Date().toISOString(),
@@ -66,7 +84,9 @@ async function recoverOrphans() {
 }
 
 await recoverOrphans();
-console.log(`[pi-watcher] watching ${dirs.jobs}`);
+pruneOldRuns();
+setInterval(pruneOldRuns, 60 * 60 * 1000).unref();
+console.log(`[pi-watcher] watching ${dirs.jobs} (done TTL ${DONE_TTL_MS / 3600000}h)`);
 // chokidar v4: watch the directory (no globs), filter in the handler.
 chokidar
   .watch(dirs.jobs, { ignoreInitial: false, depth: 0, awaitWriteFinish: { stabilityThreshold: 500 } })
