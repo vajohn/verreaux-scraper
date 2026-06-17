@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { generateJobId, serializeJob, parseJob } from "./job.js";
 import { verifyTotp } from "./totp.js";
 import type { RunnerDirs } from "./runner.js";
+import type { AccountStore } from "./syncStore.js";
+import { handleEnroll, resolveDevice, handlePutPosition, handleGetPositions, type SyncDeps } from "./syncHandlers.js";
 
 export interface ApiDeps {
   dirs: RunnerDirs;
@@ -13,6 +15,11 @@ export interface ApiDeps {
   /** Random id suffix (injectable for deterministic tests). */
   newSuffix: () => string;
   corsOrigin: string;
+  /** Sync backend (omit to disable the /enroll + /sync routes). */
+  store?: AccountStore;
+  verifyOtp?: (code: string) => boolean;
+  newToken?: () => string;
+  newId?: () => string;
 }
 
 function cors(res: ServerResponse, origin: string): void {
@@ -31,6 +38,23 @@ async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function bearer(req: IncomingMessage): string | null {
+  const h = req.headers["authorization"];
+  if (typeof h !== "string" || !h.startsWith("Bearer ")) return null;
+  return h.slice("Bearer ".length).trim() || null;
+}
+
+function syncDeps(deps: ApiDeps): SyncDeps | null {
+  if (!deps.store || !deps.verifyOtp || !deps.newToken || !deps.newId) return null;
+  return {
+    store: deps.store,
+    verifyOtp: deps.verifyOtp,
+    now: () => new Date(deps.now()).toISOString(),
+    newToken: deps.newToken,
+    newId: deps.newId,
+  };
 }
 
 export async function handleApiRequest(
@@ -118,6 +142,58 @@ export async function handleApiRequest(
       return;
     } catch {
       return json(res, 404, { error: "run not found" });
+    }
+  }
+
+  const sync = syncDeps(deps);
+  if (sync && req.method === "POST" && path === "/enroll") {
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(await readBody(req)) as unknown;
+      if (typeof parsed !== "object" || parsed === null) return json(res, 400, { error: "expected a JSON object body" });
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+    const r = await handleEnroll(
+      {
+        username: String(payload["username"] ?? ""),
+        passcode: String(payload["passcode"] ?? ""),
+        otp: String(payload["otp"] ?? ""),
+        deviceName: String(payload["deviceName"] ?? "device"),
+      },
+      sync,
+    );
+    return json(res, r.status, r.body);
+  }
+
+  if (sync && (path === "/sync/position" || path === "/sync/positions")) {
+    const ctx = await resolveDevice(bearer(req), sync);
+    if (!ctx) return json(res, 401, { error: "invalid device token" });
+
+    if (req.method === "PUT" && path === "/sync/position") {
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(await readBody(req)) as Record<string, unknown>;
+      } catch {
+        return json(res, 400, { error: "invalid JSON body" });
+      }
+      const r = await handlePutPosition(
+        ctx,
+        {
+          sourceUrl: String(payload["sourceUrl"] ?? ""),
+          chapterOrder: Number(payload["chapterOrder"]),
+          pageIndex: Number(payload["pageIndex"]),
+          manuallyMarked: !!payload["manuallyMarked"],
+        },
+        sync,
+      );
+      return json(res, r.status, r.body);
+    }
+    if (req.method === "GET" && path === "/sync/positions") {
+      const since = url.searchParams.get("since");
+      const r = await handleGetPositions(ctx, since, sync);
+      return json(res, r.status, r.body);
     }
   }
 
