@@ -9,6 +9,7 @@ import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processJob } from "../dist/pi/runner.js";
 import { expiredRunDirs } from "../dist/pi/retention.js";
+import { runScrapeWithCache } from "../dist/pi/cacheAssist.js";
 
 const ROOT = process.env.VERREAUX_ROOT ?? "/work";
 const dirs = { jobs: join(ROOT, "jobs"), done: join(ROOT, "done"), state: join(ROOT, "state") };
@@ -35,27 +36,26 @@ function pruneOldRuns() {
 
 const deps = {
   now: () => new Date().toISOString(),
-  runScrape: ({ job, outDir, logPath }) =>
-    new Promise((resolve) => {
-      const log = createWriteStream(logPath);
-      // EXTRA args word-split intentionally, matching the old GitHub job.
-      // Trim first so surrounding/internal whitespace can't yield empty-string
-      // argv tokens (e.g. "  --to latest  ").
-      const trimmed = job.args.trim();
-      const extra = trimmed ? trimmed.split(/\s+/) : [];
-      const argv =
-        job.type === "probe"
-          ? [join(here, "pi-probe.mjs"), job.url, "--out", outDir]
-          : [CLI, job.url, ...extra, "--out", outDir, "--flaresolverr", FLARESOLVERR, "--log-format", "json", "--no-color"];
-      const child = spawn("node", argv, { env: { ...process.env, CI: "true" } });
-      child.stdout.pipe(log);
-      child.stderr.pipe(log);
-      child.on("close", (code) => resolve(code ?? 1));
-      child.on("error", (err) => {
-        log.write(`spawn error: ${err.message}\n`);
-        resolve(1);
+  runScrape: ({ job, outDir, logPath }) => {
+    const log = createWriteStream(logPath);
+    const spawnScrape = (extraArgs, dir) =>
+      new Promise((resolve) => {
+        const argv =
+          job.type === "probe"
+            ? [join(here, "pi-probe.mjs"), job.url, "--out", dir]
+            : [CLI, job.url, ...extraArgs, "--out", dir, "--flaresolverr", FLARESOLVERR, "--log-format", "json", "--no-color"];
+        const child = spawn("node", argv, { env: { ...process.env, CI: "true" } });
+        child.stdout.pipe(log, { end: false });
+        child.stderr.pipe(log, { end: false });
+        child.on("close", (code) => resolve(code ?? 1));
+        child.on("error", (err) => { log.write(`spawn error: ${err.message}\n`); resolve(1); });
       });
-    }),
+    const result =
+      job.type === "probe"
+        ? spawnScrape([], outDir)
+        : runScrapeWithCache({ job, outDir, doneDir: dirs.done, scrape: spawnScrape, onLog: (m) => log.write(`${m}\n`) });
+    return Promise.resolve(result).finally(() => log.end());
+  },
 };
 
 // Serial queue: never run two scrapes at once.
