@@ -73,6 +73,11 @@ export async function handleApiRequest(
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
 
+  // Resolved once up-front: /scrape may authorize via a device token, and the
+  // /enroll + /sync routes need it too. Null when the sync backend is disabled.
+  // Safe to call unconditionally because syncDeps is pure and synchronous.
+  const sync = syncDeps(deps);
+
   if (req.method === "POST" && path === "/scrape") {
     let payload: Record<string, unknown>;
     try {
@@ -84,8 +89,16 @@ export async function handleApiRequest(
     } catch {
       return json(res, 400, { error: "invalid JSON body" });
     }
-    if (!verifyTotp(deps.secret, String(payload["otp"] ?? ""), deps.now())) {
-      return json(res, 401, { error: "invalid authenticator code" });
+    // Authorize on EITHER a valid OTP or a valid device bearer token. The token
+    // path lets sync-driven (catch-up) downloads run without an OTP prompt; it
+    // is only available when the sync backend is configured.
+    let authed = verifyTotp(deps.secret, String(payload["otp"] ?? ""), deps.now());
+    if (!authed && sync) {
+      // resolveDevice touches the device's last-seen — fine here: a sync-driven scrape is genuine device activity.
+      authed = (await resolveDevice(bearer(req), sync)) !== null;
+    }
+    if (!authed) {
+      return json(res, 401, { error: "invalid authenticator code or device token" });
     }
     const id = generateJobId(new Date(deps.now()), deps.newSuffix());
     let jobJson: string;
@@ -146,7 +159,6 @@ export async function handleApiRequest(
     }
   }
 
-  const sync = syncDeps(deps);
   if (sync && req.method === "POST" && path === "/enroll") {
     let payload: Record<string, unknown>;
     try {

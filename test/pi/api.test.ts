@@ -138,4 +138,42 @@ describe("api", () => {
     expect(get.status).toBe(200);
     expect((await get.json()).positions).toHaveLength(1);
   });
+
+  it("accepts POST /scrape with a valid device bearer token and no OTP (201)", async () => {
+    await fetch(`${ctx.base}/enroll`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "u", passcode: "p", otp: "111111", deviceName: "iPad" }),
+    });
+    const res = await fetch(`${ctx.base}/scrape`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer tok-plain" },
+      body: JSON.stringify({ url: "https://x.test/s", args: "--from 49 --to latest" }),
+    });
+    expect(res.status).toBe(201);
+    expect(readdirSync(dirs.jobs)).toHaveLength(1);
+    const files = readdirSync(dirs.jobs);
+    const job = JSON.parse(readFileSync(join(dirs.jobs, files[0]!), "utf8"));
+    expect(job.url).toBe("https://x.test/s");
+    expect(job.args).toBe("--from 49 --to latest");
+  });
+
+  it("rejects POST /scrape with an invalid bearer token and no OTP (401)", async () => {
+    const res = await fetch(`${ctx.base}/scrape`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer nope" },
+      body: JSON.stringify({ url: "https://x.test/s" }),
+    });
+    expect(res.status).toBe(401);
+    expect(readdirSync(dirs.jobs)).toEqual([]);
+  });
+
+  it("still accepts POST /scrape with a valid OTP and no token (201)", async () => {
+    const res = await fetch(`${ctx.base}/scrape`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://x.test/s", otp: totp(SECRET, 1_700_000_000_000) }),
+    });
+    expect(res.status).toBe(201);
+    expect(readdirSync(dirs.jobs)).toHaveLength(1);
+  });
 });
