@@ -80,8 +80,10 @@ describe("resolveDevice + position handlers", () => {
   });
 
   it("updates lastSeenAt when a device is resolved", async () => {
-    const store = new InMemoryAccountStore();
     let clock = "2026-06-17T00:00:00.000Z";
+    // The store stamps lastSeenAt via its own clock (touchDevice), so give it
+    // the same controllable clock as the handler deps.
+    const store = new InMemoryAccountStore(() => clock);
     const d: SyncDeps = {
       store, verifyOtp: (c) => c === "111111", now: () => clock,
       newToken: () => "tok-plain", newId: (() => { let n = 0; return () => `id-${++n}`; })(),
