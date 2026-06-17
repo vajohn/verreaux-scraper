@@ -22,15 +22,28 @@ describe("InMemoryAccountStore", () => {
     expect(r.changed).toBe(false);
     expect(r.value.pageIndex).toBe(21);
     r = await s.upsertPositionMerged(acc.id, "https://x/s", { chapterOrder: 12, pageIndex: 1, manuallyMarked: false, device: "d2" });
+    expect(r.changed).toBe(true); // owner regression persists
     expect(r.value.pageIndex).toBe(1);
   });
 
-  it("returns positions changed since a timestamp", async () => {
+  it("returns all positions when since is null", async () => {
     const s = new InMemoryAccountStore(() => "2026-06-17T00:00:00Z");
     const acc = await s.createAccount("u", "h");
     await s.upsertPositionMerged(acc.id, "https://x/a", { chapterOrder: 1, pageIndex: 0, manuallyMarked: false, device: "d1" });
     const all = await s.getPositionsSince(acc.id, null);
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ sourceUrl: "https://x/a", chapterOrder: 1, pageIndex: 0 });
+  });
+
+  it("filters to positions strictly newer than 'since'", async () => {
+    let clock = "2026-06-17T00:00:00.000Z";
+    const s = new InMemoryAccountStore(() => clock);
+    const acc = await s.createAccount("u", "h");
+    clock = "2026-06-17T00:00:01.000Z";
+    await s.upsertPositionMerged(acc.id, "https://x/a", { chapterOrder: 1, pageIndex: 0, manuallyMarked: false, device: "d1" });
+    clock = "2026-06-17T00:00:03.000Z";
+    await s.upsertPositionMerged(acc.id, "https://x/b", { chapterOrder: 1, pageIndex: 0, manuallyMarked: false, device: "d1" });
+    const since = await s.getPositionsSince(acc.id, "2026-06-17T00:00:02.000Z");
+    expect(since.map((r) => r.sourceUrl)).toEqual(["https://x/b"]);
   });
 });
