@@ -7,6 +7,17 @@ import type { VerreauxManifest } from "./manifest.js";
 const _require = createRequire(import.meta.url);
 const AdmZip = _require("adm-zip") as typeof import("adm-zip");
 
+/** First `*.zip` in a directory (run output ZIPs are named `<series>.zip`, not a
+ *  fixed name; `.zip.tmp` files are excluded by the suffix check). Null if none. */
+export async function firstZipPath(dir: string): Promise<string | null> {
+  try {
+    const names = (await readdir(dir)).filter((n) => n.endsWith(".zip"));
+    return names.length ? join(dir, names[0]!) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface CachedZip {
   runId: string;
   zipPath: string;
@@ -34,12 +45,13 @@ export async function indexDoneZips(doneDir: string): Promise<Map<string, Cached
     return out;
   }
   for (const runId of runIds) {
-    const zipPath = join(doneDir, runId, "output.zip");
+    const zipPath = await firstZipPath(join(doneDir, runId));
+    if (!zipPath) continue; // no ZIP yet (running/failed run)
     let mtimeMs: number;
     try {
       mtimeMs = (await stat(zipPath)).mtimeMs;
     } catch {
-      continue; // no output.zip yet (running/failed run)
+      continue;
     }
     try {
       const zip = new AdmZip(zipPath);

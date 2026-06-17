@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import AdmZip from "adm-zip";
@@ -14,7 +14,7 @@ function writeRunZip(doneDir: string, runId: string, orders: number[]): void {
     chapterRange: { from: orders[0]!, to: "latest" }, generatedAt: "t",
   })));
   for (const o of orders) zip.addFile(`S/${formatChapterFolder(o)}/001.webp`, Buffer.from(`p${o}`));
-  zip.writeZip(join(doneDir, runId, "output.zip"));
+  zip.writeZip(join(doneDir, runId, "Cached.zip"));
 }
 
 /** Sorted chapter orders present in a ZIP (parsed from chapter folder names). */
@@ -28,6 +28,12 @@ function ordersOf(zipPath: string): number[] {
     set.add(m[2] !== undefined ? parseFloat(`${m[1]}.${m[2]}`) : parseInt(m[1]!, 10));
   }
   return [...set].sort((a, b) => a - b);
+}
+
+/** Finds the single *.zip in a directory (mirrors the API's glob) and returns its orders. */
+function zipOrdersIn(dir: string): number[] {
+  const name = readdirSync(dir).find((n) => n.endsWith(".zip"))!;
+  return ordersOf(join(dir, name));
 }
 
 /** Fake scrape: emit chapters for the requested [--from .. --to] range. `latest`
@@ -47,7 +53,7 @@ function fakeScrape(LATEST: number, calls: string[][]) {
       chapterRange: { from, to: toRaw === "latest" ? "latest" : to }, generatedAt: "t",
     })));
     for (let o = from; o <= to; o++) zip.addFile(`S/${formatChapterFolder(o)}/001.webp`, Buffer.from(`p${o}`));
-    zip.writeZip(join(dir, "output.zip"));
+    zip.writeZip(join(dir, "Delta.zip"));
     return 0;
   };
 }
@@ -77,7 +83,7 @@ describe("runScrapeWithCache", () => {
       ["--from", "49", "--to", "54"],
       ["--from", "59", "--to", "latest"],
     ]);
-    expect(ordersOf(join(outDir, "output.zip"))).toEqual([49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60]);
+    expect(zipOrdersIn(outDir)).toEqual([49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60]);
   });
 
   it("contiguous cache, no newer chapters: empty tail -> serve cached window alone (case 3)", async () => {
@@ -93,7 +99,7 @@ describe("runScrapeWithCache", () => {
 
     expect(exit).toBe(0);
     expect(calls).toEqual([["--from", "52", "--to", "latest"]]);
-    expect(ordersOf(join(outDir, "output.zip"))).toEqual([49, 50, 51]);
+    expect(zipOrdersIn(outDir)).toEqual([49, 50, 51]);
   });
 
   it("no integer --from: single plain scrape into outDir, ignores the cache", async () => {
@@ -104,7 +110,7 @@ describe("runScrapeWithCache", () => {
     const exit = await runScrapeWithCache({
       job: { id: "20260102-000000-bbbb", type: "scrape", url: "https://x/s", args: "--to latest" },
       outDir, doneDir,
-      scrape: async (args, dir) => { calls.push({ args, dir }); new AdmZip().writeZip(join(dir, "output.zip")); return 0; },
+      scrape: async (args, dir) => { calls.push({ args, dir }); new AdmZip().writeZip(join(dir, "Plain.zip")); return 0; },
     });
     expect(exit).toBe(0);
     expect(calls).toHaveLength(1);
@@ -138,6 +144,6 @@ describe("runScrapeWithCache", () => {
 
     expect(exit).toBe(0);
     expect(calls).toEqual([["--from", "49", "--to", "latest"]]);
-    expect(ordersOf(join(outDir, "output.zip"))).toEqual([49, 50, 51, 52]);
+    expect(zipOrdersIn(outDir)).toEqual([49, 50, 51, 52]);
   });
 });

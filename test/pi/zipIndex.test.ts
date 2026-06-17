@@ -14,7 +14,7 @@ function writeZip(doneDir: string, runId: string, sourceUrl: string, orders: num
     chapterRange: { from: orders[0] ?? 0, to: "latest" }, generatedAt: "t",
   })));
   for (const o of orders) zip.addFile(`S/${formatChapterFolder(o)}/001.webp`, Buffer.from("img"));
-  zip.writeZip(join(doneDir, runId, "output.zip"));
+  zip.writeZip(join(doneDir, runId, "MySeries.zip"));
 }
 
 describe("indexDoneZips", () => {
@@ -26,8 +26,8 @@ describe("indexDoneZips", () => {
     writeZip(doneDir, "20260102-000000-bbbb", "https://x/s", [49, 50, 51, 52]);
     const older = new Date(1_700_000_000_000);
     const newer = new Date(1_700_000_002_000);
-    utimesSync(join(doneDir, "20260101-000000-aaaa", "output.zip"), older, older);
-    utimesSync(join(doneDir, "20260102-000000-bbbb", "output.zip"), newer, newer);
+    utimesSync(join(doneDir, "20260101-000000-aaaa", "MySeries.zip"), older, older);
+    utimesSync(join(doneDir, "20260102-000000-bbbb", "MySeries.zip"), newer, newer);
     const index = await indexDoneZips(doneDir);
     const entries = index.get("https://x/s")!;
     expect(entries).toHaveLength(2);
@@ -35,7 +35,7 @@ describe("indexDoneZips", () => {
     expect([...entries[0]!.orders].sort((a, b) => a - b)).toEqual([49, 50, 51, 52]);
   });
 
-  it("ignores run dirs without an output.zip and returns an empty map for none", async () => {
+  it("ignores run dirs without a ZIP and returns an empty map for none", async () => {
     mkdirSync(join(doneDir, "20260101-000000-cccc"), { recursive: true }); // no zip
     const index = await indexDoneZips(doneDir);
     expect(index.size).toBe(0);
@@ -50,7 +50,7 @@ describe("indexDoneZips", () => {
       chapterRange: { from: 0, to: "latest" }, generatedAt: "t",
     })));
     zip.addFile("S/cover.webp", Buffer.from("cov"));
-    zip.writeZip(join(doneDir, runId, "output.zip"));
+    zip.writeZip(join(doneDir, runId, "Empty.zip"));
     const index = await indexDoneZips(doneDir);
     expect(index.has("https://x/empty")).toBe(false);
   });

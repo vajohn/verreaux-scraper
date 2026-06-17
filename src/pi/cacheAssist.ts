@@ -1,8 +1,8 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ScrapeJob } from "./job.js";
-import { indexDoneZips } from "./zipIndex.js";
+import { indexDoneZips, firstZipPath } from "./zipIndex.js";
 import { planCacheReuse, type ScrapeSegment } from "./cachePlan.js";
 import { assembleOutputZip } from "./zipAssemble.js";
 
@@ -64,8 +64,8 @@ export async function runScrapeWithCache(deps: CacheAssistDeps): Promise<number>
       const dir = await mkdtemp(join(tmpdir(), "verreaux-delta-"));
       segDirs.push(dir);
       await scrape(segmentArgs(job.args, seg), dir);
-      const z = join(dir, "output.zip");
-      if (await stat(z).then(() => true).catch(() => false)) deltaZips.push(z);
+      const z = await firstZipPath(dir);
+      if (z) deltaZips.push(z);
       else onLog?.(`cache-assist: segment --from ${seg.from} --to ${seg.to} produced no chapters; skipping`);
     }
     await assembleOutputZip({
