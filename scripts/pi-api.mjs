@@ -24,7 +24,10 @@ const deps = {
 if (process.env.DATABASE_URL) {
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   const store = new PgAccountStore(pool);
-  await store.init();
+  await store.init().catch((err) => {
+    console.error("[pi-api] store.init failed:", err?.message ?? err);
+    throw err; // crash; compose restart: unless-stopped will retry once pg is up
+  });
   deps.store = store;
   deps.verifyOtp = (code) => verifyTotp(SECRET, code, Date.now());
   deps.newToken = () => randomBytes(32).toString("hex");
