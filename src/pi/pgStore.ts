@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS reading_positions (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, source_url)
 );
+-- Containment lookups by device token hash (findByDeviceTokenHash).
+CREATE INDEX IF NOT EXISTS accounts_devices_gin ON accounts USING gin (devices);
 `;
 
 interface AccountRow { id: string; username: string; passcode_hash: string; devices: Device[] }

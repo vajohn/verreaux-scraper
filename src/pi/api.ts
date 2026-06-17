@@ -168,11 +168,15 @@ export async function handleApiRequest(
     return json(res, r.status, r.body);
   }
 
-  if (sync && (path === "/sync/position" || path === "/sync/positions")) {
+  // Gate on method+path so a wrong-method request (e.g. GET /sync/position)
+  // falls through to 404 without resolving/touching the device.
+  const isPutPosition = req.method === "PUT" && path === "/sync/position";
+  const isGetPositions = req.method === "GET" && path === "/sync/positions";
+  if (sync && (isPutPosition || isGetPositions)) {
     const ctx = await resolveDevice(bearer(req), sync);
     if (!ctx) return json(res, 401, { error: "invalid device token" });
 
-    if (req.method === "PUT" && path === "/sync/position") {
+    if (isPutPosition) {
       let payload: Record<string, unknown>;
       try {
         const parsed = JSON.parse(await readBody(req)) as unknown;
@@ -195,7 +199,7 @@ export async function handleApiRequest(
       );
       return json(res, r.status, r.body);
     }
-    if (req.method === "GET" && path === "/sync/positions") {
+    if (isGetPositions) {
       const since = url.searchParams.get("since");
       const r = await handleGetPositions(ctx, since, sync);
       return json(res, r.status, r.body);
