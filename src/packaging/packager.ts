@@ -26,6 +26,7 @@ import { join } from "node:path";
 import type { Archiver, ArchiverOptions } from "archiver";
 
 import type { EventBus } from "../core/events.js";
+import type { VerreauxManifest } from "../pi/manifest.js";
 import { sanitizeSeriesName } from "./sanitize.js";
 import type { StagingDir } from "./staging.js";
 
@@ -57,6 +58,11 @@ export interface PackagerBuildOpts {
    * run-state. Only consulted when `allowPartial` is false.
    */
   expectedPagesPerChapter?: Map<number, number>;
+  /**
+   * When supplied, a `verreaux.json` file carrying source provenance is written
+   * at the ZIP root (alongside the series folder, not inside it).
+   */
+  manifest?: VerreauxManifest;
 }
 
 export interface PackagerBuildResult {
@@ -104,6 +110,7 @@ export class Packager {
         seriesFolder,
         chapterNames,
         tmpPath,
+        opts.manifest,
       );
 
       await rename(tmpPath, finalPath);
@@ -159,6 +166,7 @@ export class Packager {
     seriesFolder: string,
     chapterNames: readonly string[],
     tmpPath: string,
+    manifest?: VerreauxManifest,
   ): Promise<{ chapterCount: number; pageCount: number }> {
     const output = createWriteStream(tmpPath);
     // Default store=true; per-entry override for the PNG cover.
@@ -176,6 +184,17 @@ export class Packager {
     });
 
     archive.pipe(output);
+
+    // Root-level provenance manifest. Unlike the already-compressed page
+    // images (STORED), this small JSON benefits from compression, so it is a
+    // deliberate per-entry DEFLATE override (store: false) — the second such
+    // override alongside the PNG cover above.
+    if (manifest) {
+      archive.append(JSON.stringify(manifest, null, 2), {
+        name: "verreaux.json",
+        store: false,
+      });
+    }
 
     let totalPages = 0;
     let chapterCount = 0;

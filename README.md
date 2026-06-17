@@ -214,19 +214,42 @@ NODE_TLS_REJECT_UNAUTHORIZED=0 verreaux-scrape <url> --out ~/Downloads
 ```
 
 **qimanhwa.com** is blocked by Katim's Zscaler under the "Online and Other Games"
-category and cannot be scraped from the corporate network. Scrape it via the
-TOTP-gated GitHub Actions workflow using the local wrapper:
+category and cannot be scraped from the corporate network. Run the scrape on the
+Raspberry Pi instead — it sits on the home LAN with a clean egress, and Zscaler
+lets local-LAN traffic through, so the Mac can drive it directly over SSH.
 
-    node scripts/scrape-remote.mjs https://qimanhwa.com/series/<slug> -- --from 1 --to 10
+### Scrape on the Pi
 
-After `npm link` (or a global install) the same wrapper is available as a command:
+The Pi runs a Docker stack (`docker-compose.yml`): a **worker** that watches a
+job queue, an OTP-gated **api**, and a **flaresolverr** sidecar for Cloudflare.
+Jobs flow through a drop-folder queue (`~/verreaux/data/jobs` → `~/verreaux/data/done`).
 
-    verreaux-scrape-remote https://qimanhwa.com/series/<slug> -- --from 1 --to 10
+**From the Mac (LAN), via the wrapper:**
 
-You'll be prompted for your authenticator code; the wrapper dispatches the remote
-run, waits, and downloads the resulting ZIP(s) into ./output — so it feels like a
-local download even though the work runs on GitHub. Output ZIPs are also kept as a
-build artifact for 7 days.
+    verreaux-scrape-pi https://qimanhwa.com/series/<slug> -- --from 1 --to 10
+
+(or `node scripts/scrape-pi.mjs <url> -- <args>`). It scp's a job to the Pi,
+polls until done, and downloads the resulting ZIP(s) into ./output — so it feels
+like a local download even though the work runs on the Pi. Override the target
+with `PI_HOST` / `PI_USER` (defaults `pajohn.local` / `vajohn`); add `--probe`
+for the qimanhwa diagnostic, or `--dry-run` to print the planned ssh/scp commands.
+
+**From the PWA / anywhere (HTTP API):** `POST /scrape {url,args,otp}` returns a
+run id; poll `GET /runs/:id` and fetch `GET /runs/:id/output.zip`. The API is
+gated by a TOTP code (`scripts/totp.mjs gen` to mint the secret, `totp.mjs now`
+for a code) and can be exposed off-LAN via Tailscale Funnel or a Cloudflare Tunnel.
+
+Every produced ZIP embeds a root `verreaux.json` manifest recording the source
+URL, title, adapter, and chapter range — the reader app uses it to capture the
+source and later "update from source."
+
+**Pi setup (one-time):** `ssh-copy-id vajohn@pajohn.local` for key auth; on the
+Pi, clone the repo to `~/verreaux`, `mkdir -p data/{jobs,done,state}`, put
+`SCRAPE_TOTP_SECRET` in `.env`, then `docker compose build && docker compose up -d`.
+
+> The TOTP-gated GitHub Actions workflow (`scrape-remote.mjs` / `.github/workflows/`)
+> remains as a fallback until the Pi path is validated end-to-end on hardware,
+> after which it is retired.
 
 ## Native build note
 

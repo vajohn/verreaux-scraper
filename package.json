@@ -12,7 +12,8 @@
   },
   "bin": {
     "verreaux-scrape": "./dist/cli/index.js",
-    "verreaux-scrape-remote": "./scripts/scrape-remote.mjs"
+    "verreaux-scrape-remote": "./scripts/scrape-remote.mjs",
+    "verreaux-scrape-pi": "./scripts/scrape-pi.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
@@ -31,6 +32,7 @@
     "better-sqlite3": "^11.9.1",
     "bottleneck": "^2.19.5",
     "cheerio": "^1.0.0",
+    "chokidar": "^4.0.3",
     "commander": "^13.1.0",
     "got": "^14.4.6",
     "jszip": "^3.10.1",

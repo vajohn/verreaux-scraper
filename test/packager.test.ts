@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { deflateRawSync } from "node:zlib";
 import { makeTmpDir } from "./setup.js";
 import { StagingDir } from "../src/packaging/staging.js";
@@ -424,5 +424,41 @@ describe("Packager", () => {
     const zip = new AdmZip(result.path);
     const hasCover = zip.getEntries().some((e) => /\/cover\./.test(e.entryName));
     expect(hasCover).toBe(false);
+  });
+
+  it("embeds verreaux.json at the ZIP root (DEFLATE) when a manifest is supplied", async () => {
+    const staging = await buildStaging(tmpDir, "run-manifest", 1, 2);
+    const result = await packager.build(staging, {
+      outPath: join(tmpDir, "with-manifest"),
+      seriesTitle: "Solo Leveling",
+      allowPartial: true,
+      manifest: {
+        schema: 1,
+        sourceUrl: "https://qimanhwa.com/series/solo",
+        seriesTitle: "Solo Leveling",
+        adapter: "qimanhwa",
+        chapterRange: { from: 0, to: "latest" },
+        generatedAt: "2026-06-16T15:30:12Z",
+      },
+    });
+    const buf = readFileSync(result.path);
+    const entries = parseZipEntries(buf);
+    const names = entries.map((e) => e.name);
+    expect(names).toContain("verreaux.json");
+    expect(names).not.toContain("Solo Leveling/verreaux.json");
+    // The manifest is small JSON, so it is DEFLATE'd (method 8), unlike the
+    // STORED (method 0) already-compressed page images.
+    expect(entries.find((e) => e.name === "verreaux.json")?.compressionMethod).toBe(8);
+  });
+
+  it("omits verreaux.json when no manifest is supplied", async () => {
+    const staging = await buildStaging(tmpDir, "run-nomanifest", 1, 2);
+    const result = await packager.build(staging, {
+      outPath: join(tmpDir, "no-manifest"),
+      seriesTitle: "Solo Leveling",
+      allowPartial: true,
+    });
+    const names = parseZipEntries(readFileSync(result.path)).map((e) => e.name);
+    expect(names).not.toContain("verreaux.json");
   });
 });
