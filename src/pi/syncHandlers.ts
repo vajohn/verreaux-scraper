@@ -38,12 +38,13 @@ export async function handleEnroll(
   }
 
   const token = deps.newToken();
+  const ts = deps.now();
   const device: Device = {
     id: deps.newId(),
     name: input.deviceName || "device",
     tokenHash: hashToken(token),
-    createdAt: deps.now(),
-    lastSeenAt: deps.now(),
+    createdAt: ts,
+    lastSeenAt: ts,
   };
   await deps.store.addDevice(account.id, device);
   return { status: 201, body: { accountId: account.id, deviceId: device.id, deviceToken: token } };
@@ -73,7 +74,16 @@ export async function handlePutPosition(
     manuallyMarked: !!input.manuallyMarked,
     device: ctx.device.id,
   });
-  return { status: 200, body: { sourceUrl: input.sourceUrl, ...result.value } };
+  // Omit internal ownerDevice from the public response.
+  return {
+    status: 200,
+    body: {
+      sourceUrl: input.sourceUrl,
+      chapterOrder: result.value.chapterOrder,
+      pageIndex: result.value.pageIndex,
+      manuallyMarked: result.value.manuallyMarked,
+    },
+  };
 }
 
 export async function handleGetPositions(
@@ -81,6 +91,14 @@ export async function handleGetPositions(
   since: string | null,
   deps: SyncDeps,
 ): Promise<HandlerResult> {
-  const positions = await deps.store.getPositionsSince(ctx.account.id, since);
+  const rows = await deps.store.getPositionsSince(ctx.account.id, since);
+  // Public shape: omit internal ownerDevice.
+  const positions = rows.map((p) => ({
+    sourceUrl: p.sourceUrl,
+    chapterOrder: p.chapterOrder,
+    pageIndex: p.pageIndex,
+    manuallyMarked: p.manuallyMarked,
+    updatedAt: p.updatedAt,
+  }));
   return { status: 200, body: { positions } };
 }
