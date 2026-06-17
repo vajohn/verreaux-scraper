@@ -24,8 +24,9 @@ export interface ApiDeps {
 
 function cors(res: ServerResponse, origin: string): void {
   res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  // PUT + authorization are needed by the sync routes; harmless for the others.
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -150,7 +151,7 @@ export async function handleApiRequest(
     let payload: Record<string, unknown>;
     try {
       const parsed = JSON.parse(await readBody(req)) as unknown;
-      if (typeof parsed !== "object" || parsed === null) return json(res, 400, { error: "expected a JSON object body" });
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return json(res, 400, { error: "expected a JSON object body" });
       payload = parsed as Record<string, unknown>;
     } catch {
       return json(res, 400, { error: "invalid JSON body" });
@@ -174,7 +175,11 @@ export async function handleApiRequest(
     if (req.method === "PUT" && path === "/sync/position") {
       let payload: Record<string, unknown>;
       try {
-        payload = JSON.parse(await readBody(req)) as Record<string, unknown>;
+        const parsed = JSON.parse(await readBody(req)) as unknown;
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return json(res, 400, { error: "expected a JSON object body" });
+        }
+        payload = parsed as Record<string, unknown>;
       } catch {
         return json(res, 400, { error: "invalid JSON body" });
       }
