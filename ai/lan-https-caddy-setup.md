@@ -5,10 +5,13 @@
 **How:** a Caddy reverse proxy on the Pi terminates TLS using its **built-in local CA** (`tls internal`) for the name `pi.home.arpa`. You install Caddy's root CA on each reading device once (it then trusts every service behind this Caddy, now and future). Pi-hole resolves `pi.home.arpa` → the Pi's LAN IP. The Funnel stays as the off-LAN ("Remote") path; Caddy is an additional LAN-only door to the same `api:8080`.
 
 ```
-phone (HTTPS PWA)  ──LAN──▶  https://pi.home.arpa  (Pi-hole → 192.168.1.107)
-                              └─▶ Caddy :443  (TLS, local CA)  ──▶  api:8080
+phone (HTTPS PWA)  ──LAN──▶  https://pi.home.arpa:8443  (Pi-hole → 192.168.1.107)
+                              └─▶ Caddy host:8443→:443  (TLS, local CA)  ──▶  api:8080
 off-LAN (no Tailscale)        https://pajohn.tail8f51b4.ts.net  ──Funnel──▶ api:8080   (unchanged)
 ```
+
+> Caddy runs on host port **8443** because Tailscale Funnel already holds the
+> Pi's `:443` (it serves the Remote path). So the Local URL carries `:8443`.
 
 No public domain, no Let's Encrypt, no internet required.
 
@@ -20,11 +23,11 @@ No public domain, no Let's Encrypt, no internet required.
 ```bash
 cd ~/verreaux
 git pull                                  # brings Caddyfile + the caddy compose service
-docker compose up -d caddy                # pulls caddy:2-alpine, starts it on :443
-docker compose ps                         # caddy should be Up, 0.0.0.0:443->443
+docker compose up -d caddy                # pulls caddy:2-alpine, starts it on host :8443
+docker compose ps                         # caddy should be Up, 0.0.0.0:8443->443
 docker compose logs caddy | tail -20      # expect it serving pi.home.arpa; no errors
 ```
-(If something already binds the Pi's `:443`, change the compose port to `8443:443` and use `https://pi.home.arpa:8443` everywhere below.)
+(Host port is **8443** because Tailscale Funnel holds the Pi's `:443`. If 8443 is ever taken too, change the compose port and the Local URL to match.)
 
 ### 2. Reserve the Pi's LAN IP
 In the router's DHCP settings, reserve the Pi's current IP (e.g. `192.168.1.107`) to its MAC so it never changes. The Pi-hole record below points at this IP.
@@ -51,14 +54,14 @@ cp ~/verreaux/data/caddy/data/caddy/pki/authorities/local/root.crt ~/caddy-root.
 - **macOS (if reading on a Mac):** double-click → Keychain Access → System → set the cert to **Always Trust**.
 
 ### 6. Point the PWA at the Local endpoint
-PWA → Settings → **Local** = `https://pi.home.arpa` → flip the toggle to **Local** when on home WiFi (leave on **Remote** when away).
+PWA → Settings → **Local** = `https://pi.home.arpa:8443` → flip the toggle to **Local** when on home WiFi (leave on **Remote** when away).
 
 ---
 
 ## Verify
 On a device that's on the LAN, using Pi-hole DNS, with the CA installed, open in the browser:
 ```
-https://pi.home.arpa/runs/x
+https://pi.home.arpa:8443/runs/x
 ```
 Expected: a clean **404 JSON** (`{"error":"run not found"}`) with **no certificate warning**. That proves: name resolves → Caddy TLS trusted → proxy to api works. Then in the PWA, Sync now / a download over **Local** should run at LAN speed.
 

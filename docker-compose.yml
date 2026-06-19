@@ -45,7 +45,7 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
-      - "443:443"
+      - "8443:443"   # host 8443 (the Pi's :443 is held by Tailscale Funnel) -> Caddy :443
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data/caddy/data:/data       # local CA + issued certs (root.crt lives here)

@@ -5,7 +5,9 @@
 # installing Caddy's root CA once (see ai/lan-https-caddy-setup.md).
 #
 # The name must match the Pi-hole Local DNS record (pi.home.arpa -> Pi LAN IP)
-# and the URL set in the PWA's "Local" field (https://pi.home.arpa).
+# and the URL set in the PWA's "Local" field (https://pi.home.arpa:8443).
+# Host port is 8443 (Tailscale Funnel holds the Pi's :443); Caddy still listens
+# on 443 inside the container and matches by hostname, so no change here.
 #
 # This is a second, LAN-only front door; the Tailscale Funnel still serves the
 # same api:8080 for off-LAN ("Remote") access, unchanged.
