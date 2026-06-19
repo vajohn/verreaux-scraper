@@ -1,0 +1,15 @@
+# LAN-only HTTPS front door for the Pi API.
+#
+# Caddy terminates TLS using its built-in *local* CA (`tls internal`) — no
+# Let's Encrypt, no public domain, no internet needed. Devices trust it by
+# installing Caddy's root CA once (see ai/lan-https-caddy-setup.md).
+#
+# The name must match the Pi-hole Local DNS record (pi.home.arpa -> Pi LAN IP)
+# and the URL set in the PWA's "Local" field (https://pi.home.arpa).
+#
+# This is a second, LAN-only front door; the Tailscale Funnel still serves the
+# same api:8080 for off-LAN ("Remote") access, unchanged.
+pi.home.arpa {
+	tls internal
+	reverse_proxy api:8080
+}

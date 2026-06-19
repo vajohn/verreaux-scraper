@@ -37,6 +37,22 @@ services:
         condition: service_healthy
     command: ["node", "scripts/pi-api.mjs"]
 
+  # LAN-only HTTPS front door (Caddy, built-in local CA). Lets the HTTPS PWA
+  # reach the API over the LAN without mixed-content blocking. The Funnel still
+  # serves api:8080 for off-LAN access — Caddy is an additional door, not a
+  # replacement. See Caddyfile + ai/lan-https-caddy-setup.md.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy/data:/data       # local CA + issued certs (root.crt lives here)
+      - ./data/caddy/config:/config
+    depends_on:
+      - api
+
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     restart: unless-stopped
