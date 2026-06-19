@@ -41,12 +41,15 @@ IP:      192.168.1.107        # the reserved Pi IP
 Devices must use Pi-hole as their resolver (normally already the case if the router hands out Pi-hole as DNS). Verify from a device on the LAN: `pi.home.arpa` should resolve to the Pi IP.
 
 ### 4. Export Caddy's root CA
-Caddy generates its local CA on first run. With the bind mount it's on the Pi's host filesystem:
+Caddy generates its local CA on first run. The bind-mounted dir is root-owned, so
+pull the cert out **through the container** (don't `cp` the host path as your user):
 ```bash
-cp ~/verreaux/data/caddy/data/caddy/pki/authorities/local/root.crt ~/caddy-root.crt
-# transfer ~/caddy-root.crt to each device (AirDrop / email / a file share / scp)
+cd ~/verreaux
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ~/caddy-root.crt
+openssl x509 -in ~/caddy-root.crt -noout -subject -fingerprint -sha256   # note the fingerprint
+# transfer ~/caddy-root.crt to each device (AirDrop / email / scp) and verify the
+# fingerprint matches before trusting it.
 ```
-(If the path differs, find it: `find ~/verreaux/data/caddy -name root.crt`.)
 
 ### 5. Install + trust the root CA on each reading device
 - **iOS:** open/AirDrop the `.crt` → Settings → *Profile Downloaded* → Install. **Then** Settings → General → About → **Certificate Trust Settings** → toggle the Caddy CA **on** (this second step is required, otherwise HTTPS still fails).
