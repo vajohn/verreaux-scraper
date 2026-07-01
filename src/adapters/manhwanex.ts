@@ -20,6 +20,7 @@ const ORIGIN_WITH_SLASH = "https://manhwanex.com/";
 
 class ManhwanexAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "ManhwaNex";
 
   matchHost(host: string): boolean {
     return host.toLowerCase().replace(/^www\./, "") === PRIMARY_HOST;

@@ -17,17 +17,21 @@ import type {
   ChapterStub,
   ResolvedSeries,
   PageStub,
+  SeriesSearchResult,
 } from "../core/types.js";
 import {
   extractNgState,
   mapSeriesMeta,
   mapChapterList,
   mapChapterImages,
+  parseQimangaSearch,
   QimanhwaParseError,
 } from "./qimanhwa.helpers.js";
 
 const SOURCE_ID = "qimanhwa" as const;
 const PRIMARY_HOST = "qimanhwa.com";
+/** Rebranded domain — search results are served under this host. */
+const ALIAS_HOST = "qimanga.com";
 const ORIGIN_WITH_SLASH = "https://qimanhwa.com/";
 const RENDER_TIMEOUT_MS = 60_000;
 
@@ -48,13 +52,15 @@ function chapterSlugFromUrl(url: string): string {
 
 class QimanhwaAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "Qimanga";
 
   matchHost(host: string): boolean {
-    return host.toLowerCase().replace(/^www\./, "") === PRIMARY_HOST;
+    const normalized = host.toLowerCase().replace(/^www\./, "");
+    return normalized === PRIMARY_HOST || normalized === ALIAS_HOST;
   }
 
   domainAliases(): readonly string[] {
-    return [];
+    return [ALIAS_HOST];
   }
 
   liveDomain(): string {
@@ -165,6 +171,14 @@ class QimanhwaAdapter implements SourceAdapter {
 
   imageRefererFor(_chapter: ChapterStub): string {
     return ORIGIN_WITH_SLASH;
+  }
+
+  async search(ctx: AdapterContext, query: string): Promise<readonly SeriesSearchResult[]> {
+    const resp = await ctx.http.get(
+      `https://api.qimanga.com/api/v1/series/search?q=${encodeURIComponent(query)}&perPage=20`,
+      { referer: "https://qimanga.com/", signal: ctx.signal },
+    );
+    return parseQimangaSearch(resp.body);
   }
 
   async dismissNsfwSplash(_ctx: AdapterContext, _url: string): Promise<void> {

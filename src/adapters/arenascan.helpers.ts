@@ -12,6 +12,30 @@
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
+import type { SeriesSearchResult, SourceAdapter } from "../core/types.js";
+
+// ---------------------------------------------------------------------------
+// parseThemesiaSearch
+//
+// Shared parser for Themesia-theme WordPress sites (arenascan, drake, etc.).
+// Parses the JSON response from the `ts_ac_do_search` AJAX action.
+// ---------------------------------------------------------------------------
+
+interface ThemesiaHit { post_title?: string; post_link?: string; post_image?: string; post_latest?: string; }
+
+export function parseThemesiaSearch(adapterId: SourceAdapter["id"], body: string): SeriesSearchResult[] {
+  const json = JSON.parse(body) as { series?: Array<{ all?: ThemesiaHit[] }> };
+  const hits = json.series?.flatMap((s) => s.all ?? []) ?? [];
+  return hits
+    .filter((h): h is ThemesiaHit & { post_title: string; post_link: string } => Boolean(h.post_title && h.post_link))
+    .map((h) => ({
+      adapterId,
+      title: h.post_title.trim(),
+      seriesUrl: h.post_link,
+      coverUrl: h.post_image ?? null,
+      latestChapter: h.post_latest ?? null,
+    }));
+}
 
 // ---------------------------------------------------------------------------
 // Public types

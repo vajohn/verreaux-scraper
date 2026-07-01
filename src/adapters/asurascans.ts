@@ -23,6 +23,7 @@ import type {
   ChapterStub,
   PageStub,
   ResolvedSeries,
+  SeriesSearchResult,
 } from "../core/types.js";
 import {
   parseSeriesPage,
@@ -31,6 +32,7 @@ import {
   buildChapterUrl,
   isNsfwSplash,
   extractAstroPageJson,
+  parseAsuraSearch,
 } from "./asurascans.helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -85,6 +87,7 @@ export class SlugMutationUnrecoverableError extends Error {
 
 export class AsuraScansAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "Asura Scans";
 
   /** Cached live domain — set on first resolveLiveDomain() call. */
   private cachedLiveDomain: string | null = null;
@@ -351,6 +354,20 @@ export class AsuraScansAdapter implements SourceAdapter {
     });
 
     return pages;
+  }
+
+  // -------------------------------------------------------------------------
+  // search — query the AsuraScans JSON search API.
+  // -------------------------------------------------------------------------
+  async search(
+    ctx: AdapterContext,
+    query: string,
+  ): Promise<readonly SeriesSearchResult[]> {
+    const resp = await ctx.http.get(
+      `https://api.asurascans.com/api/search?q=${encodeURIComponent(query)}`,
+      { referer: "https://asurascans.com/", signal: ctx.signal },
+    );
+    return parseAsuraSearch(resp.body);
   }
 
   // -------------------------------------------------------------------------

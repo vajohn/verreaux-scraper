@@ -51,6 +51,7 @@ const ORIGIN_WITH_SLASH = "https://drakecomic.org/";
 
 class DrakeAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "Drake Comic";
 
   matchHost(host: string): boolean {
     const normalized = host.toLowerCase().replace(/^www\./, "");

@@ -6,6 +6,31 @@
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
+import type { SeriesSearchResult } from "../core/types.js";
+
+// ---------------------------------------------------------------------------
+// parseHivetoonsSearch
+//
+// Parses the JSON response from the HiveToons search API:
+//   GET https://api.hivetoons.org/api/query?searchTerm=<q>&perPage=20
+// Expected shape: { posts: [{ id, slug, postTitle, featuredImage, ... }], totalCount, searchTerm }
+// ---------------------------------------------------------------------------
+
+interface HtHit { slug?: string; postTitle?: string; featuredImage?: string; }
+
+export function parseHivetoonsSearch(body: string): SeriesSearchResult[] {
+  const json = JSON.parse(body) as { posts?: HtHit[] };
+  return (json.posts ?? [])
+    .filter((h): h is HtHit & { slug: string; postTitle: string } => Boolean(h.slug && h.postTitle))
+    .map((h) => ({
+      adapterId: "hivetoons" as const,
+      title: h.postTitle.trim(),
+      // TODO(search): confirm hivetoons series URL path segment against a live result
+      seriesUrl: `https://hivetoons.org/series/${h.slug}`,
+      coverUrl: h.featuredImage ?? null,
+      coverReferer: "https://hivetoons.org/",
+    }));
+}
 
 // ---------------------------------------------------------------------------
 // Public types

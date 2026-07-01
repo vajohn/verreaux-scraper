@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
+import type { SeriesSearchResult } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -462,6 +463,34 @@ export function isNsfwSplash(html: string): boolean {
   if (!hasSplashMarker) return false;
   const hasCdnImages = CDN_IMAGE_RE.test(html);
   return !hasCdnImages;
+}
+
+// ---------------------------------------------------------------------------
+// parseAsuraSearch — parse the AsuraScans JSON search API response.
+//
+// Endpoint: https://api.asurascans.com/api/search?q=<query>
+// Response: { data: [{ id, slug, title, cover, ... }], meta: { total, per_page } }
+// ---------------------------------------------------------------------------
+
+interface AsuraHit {
+  slug?: string;
+  title?: string;
+  cover?: string;
+}
+
+export function parseAsuraSearch(body: string): SeriesSearchResult[] {
+  const json = JSON.parse(body) as { data?: AsuraHit[] };
+  return (json.data ?? [])
+    .filter((h): h is AsuraHit & { slug: string; title: string } =>
+      Boolean(h.slug && h.title),
+    )
+    .map((h) => ({
+      adapterId: "asurascans" as const,
+      title: h.title.trim(),
+      seriesUrl: `https://asurascans.com/series/${h.slug}`,
+      coverUrl: h.cover ?? null,
+      coverReferer: "https://asurascans.com/",
+    }));
 }
 
 // NextDataNotFoundError is already exported at the class declaration above.

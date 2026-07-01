@@ -12,11 +12,13 @@ import type {
   ChapterStub,
   ResolvedSeries,
   PageStub,
+  SeriesSearchResult,
 } from "../core/types.js";
 import {
   parseSeriesPage,
   parseChapterPage,
   extractImageArrayFromScript,
+  parseHivetoonsSearch,
   HivetoonsParseError,
 } from "./hivetoons.helpers.js";
 
@@ -27,6 +29,7 @@ const ORIGIN_WITH_SLASH = "https://hivetoons.org/";
 
 class HivetoonsAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "HiveToons";
 
   matchHost(host: string): boolean {
     return host.toLowerCase().replace(/^www\./, "") === PRIMARY_HOST;
@@ -162,6 +165,13 @@ class HivetoonsAdapter implements SourceAdapter {
 
   imageRefererFor(chapter: ChapterStub): string {
     return chapter.chapterUrl;
+  }
+
+  async search(ctx: AdapterContext, query: string): Promise<readonly SeriesSearchResult[]> {
+    const resp = await ctx.http.get(
+      `https://api.hivetoons.org/api/query?searchTerm=${encodeURIComponent(query)}&perPage=20`,
+      { referer: ORIGIN_WITH_SLASH, signal: ctx.signal });
+    return parseHivetoonsSearch(resp.body);
   }
 
   async dismissNsfwSplash(_ctx: AdapterContext, _url: string): Promise<void> {
