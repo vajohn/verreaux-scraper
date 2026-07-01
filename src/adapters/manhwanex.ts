@@ -2,8 +2,8 @@
 // LiteSpeed, no Cloudflare: plain HttpClient. resolveSeries reads title/cover
 // from the series page and the chapter list from the modern Madara endpoint
 // POST {seriesUrl}ajax/chapters/. Reader pages are server-rendered (plain GET).
-import type { SourceAdapter, AdapterContext, ChapterStub, ResolvedSeries, PageStub } from "../core/types.js";
-import { parseSeriesMetadata, parseChapterList, parseReaderImages, type RawChapter } from "./manhwanex.helpers.js";
+import type { SourceAdapter, AdapterContext, ChapterStub, ResolvedSeries, PageStub, SeriesSearchResult } from "../core/types.js";
+import { parseSeriesMetadata, parseChapterList, parseReaderImages, parseManhwanexSearch, type RawChapter } from "./manhwanex.helpers.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -142,6 +142,26 @@ class ManhwanexAdapter implements SourceAdapter {
   // -------------------------------------------------------------------------
   imageRefererFor(chapter: ChapterStub): string {
     return chapter.chapterUrl;
+  }
+
+  // -------------------------------------------------------------------------
+  // search
+  //
+  // Free-text title search via the Madara wp-manga-search-manga endpoint:
+  //   POST https://manhwanex.com/wp-admin/admin-ajax.php
+  //   body: action=wp-manga-search-manga&title=<query>
+  //   header: x-requested-with: XMLHttpRequest
+  //
+  // Response is JSON: { "success": true, "data": [ { "title", "url", "type" } ] }
+  // There is no cover URL in the response.
+  // -------------------------------------------------------------------------
+  async search(ctx: AdapterContext, query: string): Promise<readonly SeriesSearchResult[]> {
+    const resp = await ctx.http.post(`${ORIGIN}/wp-admin/admin-ajax.php`, {
+      referer: ORIGIN_WITH_SLASH, signal: ctx.signal,
+      headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8", "x-requested-with": "XMLHttpRequest" },
+      body: `action=wp-manga-search-manga&title=${encodeURIComponent(query)}`,
+    });
+    return parseManhwanexSearch(resp.body);
   }
 
   // -------------------------------------------------------------------------

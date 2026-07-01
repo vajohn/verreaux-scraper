@@ -11,8 +11,8 @@ describe("listAdapters", () => {
     expect(typeof asura.host).toBe("string");
     expect(asura.host.length).toBeGreaterThan(0);
     expect(list.every((a) => typeof a.searchable === "boolean")).toBe(true);
-    // the 5 implemented searchers are searchable
+    // the 6 implemented searchers are searchable
     const searchable = list.filter((a) => a.searchable).map((a) => a.id).sort();
-    expect(searchable).toEqual(["arenascan","asurascans","hivetoons","manhuaplus","qimanhwa"]);
+    expect(searchable).toEqual(["arenascan","asurascans","hivetoons","manhuaplus","manhwanex","qimanhwa"]);
   });
 });

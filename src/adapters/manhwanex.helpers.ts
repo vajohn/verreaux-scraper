@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
+import type { SeriesSearchResult } from "../core/types.js";
 
 export interface ManhwanexSeries {
   title: string;
@@ -83,4 +84,30 @@ function toAbsoluteUrl(href: string, origin: string): string {
   if (/^https?:\/\//i.test(href)) return href;
   const base = origin.endsWith("/") ? origin : `${origin}/`;
   return new URL(href, base).toString();
+}
+
+// ---------------------------------------------------------------------------
+// parseManhwanexSearch
+//
+// Parses the JSON response from the Madara wp-manga-search-manga endpoint:
+//   POST https://manhwanex.com/wp-admin/admin-ajax.php
+//   body: action=wp-manga-search-manga&title=<query>
+//
+// Response shape: { "success": true, "data": [ { "title": "...", "url": "...", "type": "manga" } ] }
+// There is no cover URL in the response.
+// ---------------------------------------------------------------------------
+
+interface MnxHit { title?: string; url?: string; }
+
+export function parseManhwanexSearch(body: string): SeriesSearchResult[] {
+  const json = JSON.parse(body) as { success?: boolean; data?: MnxHit[] };
+  return (json.data ?? [])
+    .filter((h): h is MnxHit & { title: string; url: string } => Boolean(h.title && h.url))
+    .map((h) => ({
+      adapterId: "manhwanex" as const,
+      title: h.title.trim(),
+      seriesUrl: h.url,               // absolute, e.g. https://manhwanex.com/manga/<slug>/
+      coverUrl: null,                 // wp-manga-search-manga returns no cover
+      coverReferer: "https://manhwanex.com/",
+    }));
 }
