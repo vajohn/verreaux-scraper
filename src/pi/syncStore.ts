@@ -39,7 +39,7 @@ export interface AccountStore {
     accountId: string,
     sourceUrl: string,
     incoming: Position & { device: string },
-  ): Promise<MergeResult>;
+  ): Promise<MergeResult & { isNewSeries: boolean }>;
   getPositionsSince(accountId: string, since: string | null): Promise<PositionRow[]>;
 }
 
@@ -98,13 +98,14 @@ export class InMemoryAccountStore implements AccountStore {
     accountId: string,
     sourceUrl: string,
     incoming: Position & { device: string },
-  ): Promise<MergeResult> {
+  ): Promise<MergeResult & { isNewSeries: boolean }> {
     let byUrl = this.positions.get(accountId);
     if (!byUrl) {
       byUrl = new Map();
       this.positions.set(accountId, byUrl);
     }
     const existing = byUrl.get(sourceUrl);
+    const isNewSeries = existing === undefined;
     const current: StoredPosition | null = existing
       ? { chapterOrder: existing.chapterOrder, pageIndex: existing.pageIndex, manuallyMarked: existing.manuallyMarked, ownerDevice: existing.ownerDevice }
       : null;
@@ -112,7 +113,7 @@ export class InMemoryAccountStore implements AccountStore {
     if (result.changed) {
       byUrl.set(sourceUrl, { ...result.value, sourceUrl, updatedAt: this.now() });
     }
-    return result;
+    return { ...result, isNewSeries };
   }
   async getPositionsSince(accountId: string, since: string | null): Promise<PositionRow[]> {
     const rows = [...(this.positions.get(accountId)?.values() ?? [])];

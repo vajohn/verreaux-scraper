@@ -98,7 +98,7 @@ export class PgAccountStore implements AccountStore {
       );
     }
   }
-  async upsertPositionMerged(accountId: string, sourceUrl: string, incoming: Position & { device: string }): Promise<MergeResult> {
+  async upsertPositionMerged(accountId: string, sourceUrl: string, incoming: Position & { device: string }): Promise<MergeResult & { isNewSeries: boolean }> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -109,6 +109,7 @@ export class PgAccountStore implements AccountStore {
       const current: StoredPosition | null = cur.rows[0]
         ? { chapterOrder: Number(cur.rows[0].chapter_order), pageIndex: cur.rows[0].page_index as number, ownerDevice: cur.rows[0].owner_device as string, manuallyMarked: cur.rows[0].manually_marked as boolean }
         : null;
+      const isNewSeries = current === null;
       const result = mergePosition(current, incoming);
       if (result.changed) {
         await client.query(
@@ -121,7 +122,7 @@ export class PgAccountStore implements AccountStore {
         );
       }
       await client.query("COMMIT");
-      return result;
+      return { ...result, isNewSeries };
     } catch (e) {
       await client.query("ROLLBACK");
       throw e;
