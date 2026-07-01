@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { generateJobId, serializeJob, parseJob } from "./job.js";
 import { verifyTotp } from "./totp.js";
 import type { RunnerDirs } from "./runner.js";
-import type { AccountStore } from "./syncStore.js";
+import type { AccountStore, PushSubscriptionJSON } from "./syncStore.js";
 import { handleEnroll, resolveDevice, handlePutPosition, handleGetPositions, type SyncDeps } from "./syncHandlers.js";
+import { getVapidPublicKey, isPushConfigured } from "./vapid.js";
+import { notifyNewSeries } from "./pushSender.js";
 
 export interface ApiDeps {
   dirs: RunnerDirs;
@@ -25,7 +27,7 @@ export interface ApiDeps {
 function cors(res: ServerResponse, origin: string): void {
   res.setHeader("Access-Control-Allow-Origin", origin);
   // PUT + authorization are needed by the sync routes; harmless for the others.
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
 }
 
@@ -199,17 +201,24 @@ export async function handleApiRequest(
       } catch {
         return json(res, 400, { error: "invalid JSON body" });
       }
+      const sourceUrl = String(payload["sourceUrl"] ?? "");
       const r = await handlePutPosition(
         ctx,
         {
-          sourceUrl: String(payload["sourceUrl"] ?? ""),
+          sourceUrl,
           chapterOrder: Number(payload["chapterOrder"]),
           pageIndex: Number(payload["pageIndex"]),
           manuallyMarked: !!payload["manuallyMarked"],
         },
         sync,
       );
-      return json(res, r.status, r.body);
+      json(res, r.status, r.body);
+      // Best-effort: notify other devices of a newly-tracked series. Fire-and-forget
+      // AFTER the response is sent so it never blocks or fails the PUT.
+      if (r.isNewSeries && isPushConfigured()) {
+        void notifyNewSeries(sync.store, ctx.account.id, ctx.device.id, sourceUrl);
+      }
+      return;
     }
     if (isGetPositions) {
       const since = url.searchParams.get("since");
@@ -264,6 +273,36 @@ export async function handleApiRequest(
       if (timer) clearTimeout(timer);
       await cleanup();
     }
+  }
+
+  if (req.method === "GET" && path === "/push/vapid-public-key") {
+    const key = getVapidPublicKey();
+    if (!key) return json(res, 404, { error: "push not configured" });
+    return json(res, 200, { key });
+  }
+
+  if (sync && req.method === "POST" && path === "/push/subscribe") {
+    const ctx = await resolveDevice(bearer(req), sync);
+    if (!ctx) return json(res, 401, { error: "invalid device token" });
+    let payload: Record<string, unknown>;
+    try {
+      const p = JSON.parse(await readBody(req)) as unknown;
+      if (typeof p !== "object" || p === null || Array.isArray(p)) return json(res, 400, { error: "expected a JSON object body" });
+      payload = p as Record<string, unknown>;
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+    const subscription = payload["subscription"];
+    if (!subscription || typeof subscription !== "object") return json(res, 400, { error: "subscription required" });
+    await sync.store.setDevicePushSubscription(ctx.account.id, ctx.device.id, subscription as PushSubscriptionJSON);
+    return json(res, 200, { ok: true });
+  }
+
+  if (sync && req.method === "DELETE" && path === "/push/subscribe") {
+    const ctx = await resolveDevice(bearer(req), sync);
+    if (!ctx) return json(res, 401, { error: "invalid device token" });
+    await sync.store.setDevicePushSubscription(ctx.account.id, ctx.device.id, null);
+    return json(res, 200, { ok: true });
   }
 
   json(res, 404, { error: "not found" });

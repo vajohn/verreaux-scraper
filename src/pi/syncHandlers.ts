@@ -16,6 +16,11 @@ export interface HandlerResult {
   body: unknown;
 }
 
+export interface PutPositionResult extends HandlerResult {
+  /** True when this PUT created a position for a sourceUrl not previously tracked. */
+  isNewSeries: boolean;
+}
+
 export interface DeviceContext {
   account: Account;
   device: Device;
@@ -63,10 +68,10 @@ export async function handlePutPosition(
   ctx: DeviceContext,
   input: { sourceUrl: string; chapterOrder: number; pageIndex: number; manuallyMarked: boolean },
   deps: SyncDeps,
-): Promise<HandlerResult> {
+): Promise<PutPositionResult> {
   if (!input.sourceUrl || typeof input.chapterOrder !== "number" || Number.isNaN(input.chapterOrder) ||
       typeof input.pageIndex !== "number" || Number.isNaN(input.pageIndex)) {
-    return { status: 400, body: { error: "sourceUrl, chapterOrder, pageIndex required" } };
+    return { status: 400, body: { error: "sourceUrl, chapterOrder, pageIndex required" }, isNewSeries: false };
   }
   const result = await deps.store.upsertPositionMerged(ctx.account.id, input.sourceUrl, {
     chapterOrder: input.chapterOrder,
@@ -83,6 +88,7 @@ export async function handlePutPosition(
       pageIndex: result.value.pageIndex,
       manuallyMarked: result.value.manuallyMarked,
     },
+    isNewSeries: result.isNewSeries,
   };
 }
 
