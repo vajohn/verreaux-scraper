@@ -19,12 +19,14 @@ import type {
   ChapterStub,
   ResolvedSeries,
   PageStub,
+  SeriesSearchResult,
 } from "../core/types.js";
 import {
   parseSeriesMetadata,
   parseChapterList,
   extractTsReaderConfig,
   pickImageList,
+  parseThemesiaSearch,
   ArenascanParseError,
 } from "./arenascan.helpers.js";
 
@@ -190,6 +192,22 @@ class ArenascanAdapter implements SourceAdapter {
   // -------------------------------------------------------------------------
   imageRefererFor(chapter: ChapterStub): string {
     return chapter.chapterUrl;
+  }
+
+  // -------------------------------------------------------------------------
+  // search
+  //
+  // Themesia live-search AJAX endpoint. POSTs to wp-admin/admin-ajax.php with
+  // action=ts_ac_do_search and returns matching series stubs.
+  // -------------------------------------------------------------------------
+  async search(ctx: AdapterContext, query: string): Promise<readonly SeriesSearchResult[]> {
+    const resp = await ctx.http.post(`${ORIGIN}/wp-admin/admin-ajax.php`, {
+      referer: ORIGIN_WITH_SLASH,
+      signal: ctx.signal,
+      headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8", "x-requested-with": "XMLHttpRequest" },
+      body: `action=ts_ac_do_search&ts_ac_query=${encodeURIComponent(query)}`,
+    });
+    return parseThemesiaSearch(this.id, resp.body);
   }
 
   // -------------------------------------------------------------------------
