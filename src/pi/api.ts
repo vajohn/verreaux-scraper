@@ -224,5 +224,43 @@ export async function handleApiRequest(
     return json(res, 200, { adapters: listAdapters(adapterRegistry) });
   }
 
+  if (req.method === "POST" && path === "/search") {
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(await readBody(req)) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return json(res, 400, { error: "expected a JSON object body" });
+      }
+      payload = parsed as Record<string, unknown>;
+    } catch {
+      return json(res, 400, { error: "invalid JSON body" });
+    }
+    // Authorize on EITHER a valid OTP or a valid device bearer token — same
+    // policy as /scrape. The token path is only available when sync is configured.
+    let authed = verifyTotp(deps.secret, String(payload["otp"] ?? ""), deps.now());
+    if (!authed && sync) {
+      authed = (await resolveDevice(bearer(req), sync)) !== null;
+    }
+    if (!authed) {
+      return json(res, 401, { error: "invalid authenticator code or device token" });
+    }
+    const q = String(payload["q"] ?? "").trim();
+    if (q.length < 2) return json(res, 400, { error: "query too short" });
+    const sources = Array.isArray(payload["sources"]) ? (payload["sources"] as string[]) : undefined;
+    const { buildSearchContext } = await import("./searchContext.js");
+    const { runSearch } = await import("./searchService.js");
+    const { adapterRegistry } = await import("../adapters/index.js");
+    const { ctx, cleanup } = buildSearchContext();
+    try {
+      const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("search timeout")), 15_000));
+      const outcome = await Promise.race([runSearch(adapterRegistry, ctx, q, sources), timeout]);
+      return json(res, 200, outcome);
+    } catch (err) {
+      return json(res, 200, { results: [], errors: [{ adapterId: "*", error: String((err as Error).message) }] });
+    } finally {
+      await cleanup();
+    }
+  }
+
   json(res, 404, { error: "not found" });
 }
