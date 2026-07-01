@@ -85,6 +85,7 @@ export class SlugMutationUnrecoverableError extends Error {
 
 export class AsuraScansAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "Asura Scans";
 
   /** Cached live domain — set on first resolveLiveDomain() call. */
   private cachedLiveDomain: string | null = null;

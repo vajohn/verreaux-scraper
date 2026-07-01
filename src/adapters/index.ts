@@ -31,6 +31,11 @@ export interface AdapterRegistry {
    * Throws if the id is unknown.
    */
   byId(id: SourceAdapter["id"]): SourceAdapter;
+
+  /**
+   * Return all registered adapters.
+   */
+  all(): readonly SourceAdapter[];
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +72,10 @@ class AdapterRegistryImpl implements AdapterRegistry {
       );
     }
     return found;
+  }
+
+  all(): readonly SourceAdapter[] {
+    return this.adapters;
   }
 }
 

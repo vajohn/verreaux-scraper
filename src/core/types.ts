@@ -203,6 +203,15 @@ export interface GroupInfo {
 // Source adapter interface (§15.3)
 // ---------------------------------------------------------------------------
 
+export interface SeriesSearchResult {
+  readonly adapterId: SourceAdapter["id"];
+  readonly title: string;
+  readonly seriesUrl: string;         // canonical URL; must satisfy the adapter's matchHost
+  readonly coverUrl: string | null;
+  readonly coverReferer?: string;
+  readonly latestChapter?: string | null;
+}
+
 export interface SourceAdapter {
   readonly id:
     | "asurascans"
@@ -212,6 +221,9 @@ export interface SourceAdapter {
     | "hivetoons"
     | "manhwanex"
     | "qimanhwa";
+
+  /** Human-readable source name for UI (e.g. "Asura Scans"). */
+  readonly displayName: string;
 
   matchHost(host: string): boolean;
 
@@ -276,6 +288,9 @@ export interface SourceAdapter {
    *  should leave this undefined. The CLI uses this to validate --group,
    *  print --list-groups output, and prompt the user when needed. */
   listGroups?(ctx: AdapterContext, seriesUrl: string): Promise<readonly GroupInfo[]>;
+
+  /** Optional free-text title search. Adapters without a search API omit this. */
+  search?(ctx: AdapterContext, query: string): Promise<readonly SeriesSearchResult[]>;
 }
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ const ORIGIN_WITH_SLASH = "https://hivetoons.org/";
 
 class HivetoonsAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "HiveToons";
 
   matchHost(host: string): boolean {
     return host.toLowerCase().replace(/^www\./, "") === PRIMARY_HOST;

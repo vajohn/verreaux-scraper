@@ -53,6 +53,7 @@ const NSFW_BYPASS_COOKIES = [
 
 class ManhuaPlusAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "ManhuaPlus";
 
   // -------------------------------------------------------------------------
   // matchHost

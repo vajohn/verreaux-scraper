@@ -43,6 +43,7 @@ const ORIGIN_WITH_SLASH = "https://arenascan.com/";
 
 class ArenascanAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "ArenaScan";
 
   matchHost(host: string): boolean {
     const normalized = host.toLowerCase().replace(/^www\./, "");

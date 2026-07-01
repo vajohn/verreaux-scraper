@@ -48,6 +48,7 @@ function chapterSlugFromUrl(url: string): string {
 
 class QimanhwaAdapter implements SourceAdapter {
   readonly id = SOURCE_ID;
+  readonly displayName = "Qimanga";
 
   matchHost(host: string): boolean {
     return host.toLowerCase().replace(/^www\./, "") === PRIMARY_HOST;
