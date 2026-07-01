@@ -12,7 +12,11 @@
 //   https://api.qimanhwa.com/api/v1
 // Chapter image urls live on a media CDN (host varies, e.g.
 // media.quantumscans.org) and are used verbatim.
+//
+// Search API (qimanga rebrand): https://api.qimanga.com/api/v1/series/search
 // ---------------------------------------------------------------------------
+
+import type { SeriesSearchResult } from "../core/types.js";
 
 const ORIGIN = "https://qimanhwa.com";
 
@@ -142,4 +146,30 @@ export function mapChapterImages(
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .map((i) => i.url.trim());
   return images;
+}
+
+// ---------------------------------------------------------------------------
+// Search result parser — qimanga.com JSON API response
+// GET https://api.qimanga.com/api/v1/series/search?q=<query>&perPage=20
+// Response shape: { data: Array<{ id, slug, title, cover, status, ... }>, totalItems, totalPages, ... }
+// ---------------------------------------------------------------------------
+
+interface QiHit {
+  slug?: string;
+  title?: string;
+  cover?: string;
+}
+
+export function parseQimangaSearch(body: string): SeriesSearchResult[] {
+  const json = JSON.parse(body) as { data?: QiHit[] };
+  return (json.data ?? [])
+    .filter((h): h is QiHit & { slug: string; title: string } => Boolean(h.slug && h.title))
+    .map((h) => ({
+      adapterId: "qimanhwa" as const,
+      title: h.title.trim(),
+      // TODO(search): confirm qimanga series URL path segment against a live result
+      seriesUrl: `https://qimanga.com/series/${h.slug}`,
+      coverUrl: h.cover ?? null,
+      coverReferer: "https://qimanga.com/",
+    }));
 }
