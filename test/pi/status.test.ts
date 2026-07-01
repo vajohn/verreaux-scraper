@@ -23,5 +23,16 @@ describe("run status", () => {
     expect(s.state).toBe("failed");
     expect(s.exitCode).toBe(5);
     expect(s.message).toBe("boom");
+    // Defaults: no partial output unless explicitly flagged.
+    expect(s.partial).toBe(false);
+    expect(s.hasOutput).toBe(false);
+  });
+
+  it("carries partial/hasOutput when a rate-limited run produced a zip", () => {
+    const s = finalStatus(runningStatus("t0"), 5, "t1", "rate limited", { partial: true, hasOutput: true });
+    expect(s.state).toBe("failed");
+    expect(s.exitCode).toBe(5);
+    expect(s.partial).toBe(true);
+    expect(s.hasOutput).toBe(true);
   });
 });

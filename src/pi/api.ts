@@ -5,10 +5,19 @@ import { join } from "node:path";
 import { generateJobId, serializeJob, parseJob } from "./job.js";
 import { verifyTotp } from "./totp.js";
 import type { RunnerDirs } from "./runner.js";
+import type { RunStatus } from "./status.js";
 import type { AccountStore, PushSubscriptionJSON } from "./syncStore.js";
 import { handleEnroll, resolveDevice, handlePutPosition, handleGetPositions, type SyncDeps } from "./syncHandlers.js";
 import { getVapidPublicKey, isPushConfigured } from "./vapid.js";
 import { notifyNewSeries } from "./pushSender.js";
+
+/** Shape returned by GET /runs/:id. Extends the on-disk RunStatus, guaranteeing
+ *  the partial/hasOutput/exitCode fields are always present in the response. */
+export type RunStatusResponse = RunStatus & {
+  exitCode: number | null;
+  partial: boolean;
+  hasOutput: boolean;
+};
 
 export interface ApiDeps {
   dirs: RunnerDirs;
@@ -151,11 +160,18 @@ export async function handleApiRequest(
         res.end(logText);
         return;
       }
-      const status = await readFile(join(runDir, "status.json"), "utf8");
-      res.statusCode = 200;
-      res.setHeader("content-type", "application/json");
-      res.end(status);
-      return;
+      const raw = await readFile(join(runDir, "status.json"), "utf8");
+      // Augment the on-disk status so the response always carries the
+      // partial/hasOutput/exitCode fields the PWA relies on, even for older
+      // status files written before the rate-limit-salvage change.
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const body: RunStatusResponse = {
+        ...(parsed as unknown as RunStatusResponse),
+        exitCode: typeof parsed["exitCode"] === "number" ? (parsed["exitCode"] as number) : null,
+        partial: parsed["partial"] === true,
+        hasOutput: parsed["hasOutput"] === true,
+      };
+      return json(res, 200, body);
     } catch {
       return json(res, 404, { error: "run not found" });
     }

@@ -336,6 +336,25 @@ describe("runCli — pipeline result propagation", () => {
     expect(code).toBe(ExitCode.PARTIAL_RESUME_POSSIBLE);
   });
 
+  it("exits PARTIAL_RESUME_POSSIBLE when the pipeline returns rateLimited (zip on disk)", async () => {
+    mockMatchUrl.mockReturnValue(makeFakeAdapter());
+    mockBuildRunContext.mockResolvedValue(makeFakeContext());
+    mockPipelineSuccess({
+      status: "partial",
+      exitCode: ExitCode.PARTIAL_RESUME_POSSIBLE,
+      // Cast-through: rateLimited is present on the real PipelineResult.
+      ...( { rateLimited: true } as Record<string, unknown> ),
+    });
+
+    const code = await runCli([
+      "node", "verreaux-scrape",
+      "https://asuracomic.net/series/test-abc123",
+      "--out", tmpDir,
+    ]);
+
+    expect(code).toBe(ExitCode.PARTIAL_RESUME_POSSIBLE);
+  });
+
   it("maps thrown errors via errorMap and returns correct exit code", async () => {
     mockMatchUrl.mockReturnValue(makeFakeAdapter());
     mockBuildRunContext.mockResolvedValue(makeFakeContext());

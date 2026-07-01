@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { parseJob, type ScrapeJob } from "./job.js";
 import { runningStatus, finalStatus, type RunStatus } from "./status.js";
@@ -22,8 +22,23 @@ export interface RunnerDeps {
   runScrape: (args: RunScrapeArgs) => Promise<number>;
 }
 
+/** Mirrors ExitCode.PARTIAL_RESUME_POSSIBLE (core/types). Kept local so the pi
+ *  runner does not depend on the scraper core enum. */
+const PARTIAL_RESUME_POSSIBLE_EXIT = 5;
+
 async function writeStatus(doneDir: string, status: RunStatus): Promise<void> {
   await writeFile(join(doneDir, "status.json"), JSON.stringify(status, null, 2));
+}
+
+/** True when the run directory contains a packaged zip. Matches the API's
+ *  own "any .zip in the run dir" convention for serving /runs/:id/output.zip. */
+async function runDirHasZip(doneDir: string): Promise<boolean> {
+  try {
+    const files = await readdir(doneDir);
+    return files.some((f) => f.endsWith(".zip"));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -114,6 +129,15 @@ export async function processJob(
     message = extractFailureMessage(log);
   }
 
-  await writeStatus(doneDir, finalStatus(started, exitCode, deps.now(), message));
+  // Exit 5 (PARTIAL_RESUME_POSSIBLE) with a zip on disk is a rate-limit salvage:
+  // the run "failed" overall but produced importable, resumable output. Surface
+  // that so the app can import what completed instead of discarding it.
+  const hasOutput = exitCode !== 0 ? await runDirHasZip(doneDir) : false;
+  const partial = exitCode === PARTIAL_RESUME_POSSIBLE_EXIT && hasOutput;
+
+  await writeStatus(
+    doneDir,
+    finalStatus(started, exitCode, deps.now(), message, { partial, hasOutput }),
+  );
   await rename(processingPath, join(dirs.jobs, `${job.id}.json.done`)).catch(() => undefined);
 }

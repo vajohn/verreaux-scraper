@@ -79,6 +79,32 @@ describe("api", () => {
     expect((await res.json()).state).toBe("succeeded");
   });
 
+  it("surfaces partial/hasOutput/exitCode for a rate-limited run on GET /runs/:id", async () => {
+    mkdirSync(join(dirs.done, "run5"));
+    writeFileSync(
+      join(dirs.done, "run5", "status.json"),
+      JSON.stringify({ state: "failed", exitCode: 5, partial: true, hasOutput: true, message: "rate limited" }),
+    );
+    const res = await fetch(`${ctx.base}/runs/run5`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.state).toBe("failed");
+    expect(body.exitCode).toBe(5);
+    expect(body.partial).toBe(true);
+    expect(body.hasOutput).toBe(true);
+  });
+
+  it("defaults partial/hasOutput to false when a legacy status.json omits them", async () => {
+    mkdirSync(join(dirs.done, "run6"));
+    writeFileSync(join(dirs.done, "run6", "status.json"), JSON.stringify({ state: "succeeded", exitCode: 0 }));
+    const res = await fetch(`${ctx.base}/runs/run6`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.partial).toBe(false);
+    expect(body.hasOutput).toBe(false);
+    expect(body.exitCode).toBe(0);
+  });
+
   it("sets CORS headers and answers preflight", async () => {
     const res = await fetch(`${ctx.base}/scrape`, { method: "OPTIONS" });
     expect(res.status).toBe(204);

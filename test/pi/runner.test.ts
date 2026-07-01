@@ -71,6 +71,41 @@ describe("processJob", () => {
     expect(readdirSync(dirs.jobs)).toEqual(["j2.json.done"]);
   });
 
+  it("flags partial/hasOutput when a rate-limited run (exit 5) left a zip behind", async () => {
+    const dirs = makeDirs();
+    const jobPath = join(dirs.jobs, "j6.json");
+    writeFileSync(jobPath, JSON.stringify({ id: "j6", type: "scrape", url: "https://x.test/s" }));
+
+    await processJob(jobPath, dirs, {
+      now: () => "2026-06-16T15:30:12Z",
+      // Simulate the salvage path: the scrape packaged a partial zip, then
+      // exited 5 (PARTIAL_RESUME_POSSIBLE).
+      runScrape: async ({ outDir }) => {
+        writeFileSync(join(outDir, "Test Series.zip"), "PK");
+        return 5;
+      },
+    });
+
+    const status = JSON.parse(readFileSync(join(dirs.done, "j6", "status.json"), "utf8"));
+    expect(status.state).toBe("failed");
+    expect(status.exitCode).toBe(5);
+    expect(status.partial).toBe(true);
+    expect(status.hasOutput).toBe(true);
+  });
+
+  it("does not flag partial/hasOutput for a non-zip failure (exit 2)", async () => {
+    const dirs = makeDirs();
+    const jobPath = join(dirs.jobs, "j7.json");
+    writeFileSync(jobPath, JSON.stringify({ id: "j7", type: "scrape", url: "https://x.test/s" }));
+
+    await processJob(jobPath, dirs, baseDeps(2));
+
+    const status = JSON.parse(readFileSync(join(dirs.done, "j7", "status.json"), "utf8"));
+    expect(status.exitCode).toBe(2);
+    expect(status.partial).toBe(false);
+    expect(status.hasOutput).toBe(false);
+  });
+
   it("writes a failed status for an unparseable job without throwing", async () => {
     const dirs = makeDirs();
     const jobPath = join(dirs.jobs, "bad.json");
