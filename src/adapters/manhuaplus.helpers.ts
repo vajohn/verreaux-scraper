@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
+import type { SeriesSearchResult } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -181,6 +182,32 @@ export class LilianaParseError extends Error {
   constructor(message: string) {
     super(message);
   }
+}
+
+// ---------------------------------------------------------------------------
+// parseManhuaPlusSearch
+//
+// Parses the JSON response from POST /ajax/search.
+//
+// Response shape: { "list": [{ "name": string, "url": string, "cover": string }], ... }
+// The `url` field is already absolute; `cover` is a relative path.
+// ---------------------------------------------------------------------------
+
+const MP_ORIGIN = "https://manhuaplus.org";
+
+interface MpHit { name?: string; url?: string; cover?: string; }
+
+export function parseManhuaPlusSearch(body: string): SeriesSearchResult[] {
+  const json = JSON.parse(body) as { list?: MpHit[] };
+  return (json.list ?? [])
+    .filter((h): h is MpHit & { name: string; url: string } => Boolean(h.name && h.url))
+    .map((h) => ({
+      adapterId: "manhuaplus" as const,
+      title: h.name.trim(),
+      seriesUrl: h.url.startsWith("http") ? h.url : `${MP_ORIGIN}${h.url}`,
+      coverUrl: h.cover ? (h.cover.startsWith("http") ? h.cover : `${MP_ORIGIN}${h.cover}`) : null,
+      coverReferer: `${MP_ORIGIN}/`,
+    }));
 }
 
 // ---------------------------------------------------------------------------

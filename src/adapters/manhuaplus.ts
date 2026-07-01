@@ -18,12 +18,14 @@ import type {
   ChapterStub,
   ResolvedSeries,
   PageStub,
+  SeriesSearchResult,
 } from "../core/types.js";
 import {
   parseSeriesMetadata,
   parseChapterList,
   extractChapterId,
   parseImageListResponse,
+  parseManhuaPlusSearch,
   LilianaParseError,
 } from "./manhuaplus.helpers.js";
 import type { ImageListResponse } from "./manhuaplus.helpers.js";
@@ -237,6 +239,21 @@ class ManhuaPlusAdapter implements SourceAdapter {
   // -------------------------------------------------------------------------
   imageRefererFor(chapter: ChapterStub): string {
     return chapter.chapterUrl;
+  }
+
+  // -------------------------------------------------------------------------
+  // search
+  //
+  // Free-text title search via POST /ajax/search.
+  // Returns a ranked list of SeriesSearchResult from the JSON response.
+  // -------------------------------------------------------------------------
+  async search(ctx: AdapterContext, query: string): Promise<readonly SeriesSearchResult[]> {
+    const resp = await ctx.http.post(`${ORIGIN}/ajax/search`, {
+      referer: `${ORIGIN}/`, signal: ctx.signal,
+      headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8", "x-requested-with": "XMLHttpRequest" },
+      body: `search=${encodeURIComponent(query)}`,
+    });
+    return parseManhuaPlusSearch(resp.body);
   }
 
   // -------------------------------------------------------------------------
