@@ -24,6 +24,10 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       SCRAPE_TOTP_SECRET: ${SCRAPE_TOTP_SECRET:?set SCRAPE_TOTP_SECRET in .env}
       DATABASE_URL: postgres://verreaux:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/verreaux
+      # Web Push (optional — new-series notifications). Absent = push disabled (graceful no-op).
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@verreaux.local}
     volumes:
       - ./data/jobs:/work/jobs
       - ./data/done:/work/done
