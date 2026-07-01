@@ -251,13 +251,17 @@ export async function handleApiRequest(
     const { runSearch } = await import("./searchService.js");
     const { adapterRegistry } = await import("../adapters/index.js");
     const { ctx, cleanup } = buildSearchContext();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error("search timeout")), 15_000));
+      const timeout = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error("search timeout")), 15_000);
+      });
       const outcome = await Promise.race([runSearch(adapterRegistry, ctx, q, sources), timeout]);
       return json(res, 200, outcome);
     } catch (err) {
       return json(res, 200, { results: [], errors: [{ adapterId: "*", error: String((err as Error).message) }] });
     } finally {
+      if (timer) clearTimeout(timer);
       await cleanup();
     }
   }
