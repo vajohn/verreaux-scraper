@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { mergePosition, type Position, type StoredPosition, type MergeResult } from "./positionMerge.js";
-import type { Account, AccountStore, Device, PositionRow } from "./syncStore.js";
+import type { Account, AccountStore, Device, PositionRow, PushSubscriptionJSON } from "./syncStore.js";
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS accounts (
@@ -42,6 +42,10 @@ export class PgAccountStore implements AccountStore {
     const r = await this.pool.query<AccountRow>("SELECT id, username, passcode_hash, devices FROM accounts WHERE username=$1", [username]);
     return r.rows[0] ? toAccount(r.rows[0]) : null;
   }
+  async getAccountById(accountId: string): Promise<Account | null> {
+    const r = await this.pool.query<AccountRow>("SELECT id, username, passcode_hash, devices FROM accounts WHERE id=$1", [accountId]);
+    return r.rows[0] ? toAccount(r.rows[0]) : null;
+  }
   async createAccount(username: string, passcodeHash: string): Promise<Account> {
     const r = await this.pool.query<AccountRow>(
       "INSERT INTO accounts(username, passcode_hash) VALUES($1,$2) RETURNING id, username, passcode_hash, devices",
@@ -80,6 +84,19 @@ export class PgAccountStore implements AccountStore {
       `UPDATE accounts SET devices = (SELECT jsonb_agg(CASE WHEN d->>'id'=$2 THEN jsonb_set(d,'{lastSeenAt}', to_jsonb(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))) ELSE d END) FROM jsonb_array_elements(devices) d), updated_at=now() WHERE id=$1`,
       [accountId, deviceId],
     );
+  }
+  async setDevicePushSubscription(accountId: string, deviceId: string, sub: PushSubscriptionJSON | null): Promise<void> {
+    if (sub !== null) {
+      await this.pool.query(
+        `UPDATE accounts SET devices = (SELECT jsonb_agg(CASE WHEN d->>'id'=$2 THEN jsonb_set(d,'{pushSubscription}', $3::jsonb) ELSE d END) FROM jsonb_array_elements(devices) d), updated_at=now() WHERE id=$1`,
+        [accountId, deviceId, JSON.stringify(sub)],
+      );
+    } else {
+      await this.pool.query(
+        `UPDATE accounts SET devices = (SELECT jsonb_agg(CASE WHEN d->>'id'=$2 THEN (d - 'pushSubscription') ELSE d END) FROM jsonb_array_elements(devices) d), updated_at=now() WHERE id=$1`,
+        [accountId, deviceId],
+      );
+    }
   }
   async upsertPositionMerged(accountId: string, sourceUrl: string, incoming: Position & { device: string }): Promise<MergeResult> {
     const client = await this.pool.connect();

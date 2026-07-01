@@ -7,6 +7,7 @@ import pg from "pg";
 import { handleApiRequest } from "../dist/pi/api.js";
 import { PgAccountStore } from "../dist/pi/pgStore.js";
 import { verifyTotp } from "../dist/pi/totp.js";
+import { initVapid } from "../dist/pi/vapid.js";
 
 const ROOT = process.env.VERREAUX_ROOT ?? "/work";
 const SECRET = process.env.SCRAPE_TOTP_SECRET;
@@ -35,6 +36,9 @@ if (process.env.DATABASE_URL) {
   console.log("[pi-api] sync backend enabled (postgres)");
 } else {
   console.log("[pi-api] sync backend disabled (no DATABASE_URL)");
+}
+if (!initVapid()) {
+  console.warn("[pi-api] VAPID keys not configured — web push notifications disabled");
 }
 // `||` (not `??`) so an empty-string PORT (a common .env/compose accident)
 // falls back to 8080 instead of Number("") === 0 binding a random port.

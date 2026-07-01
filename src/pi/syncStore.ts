@@ -1,11 +1,17 @@
 import { mergePosition, type Position, type StoredPosition, type MergeResult } from "./positionMerge.js";
 
+export interface PushSubscriptionJSON {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
 export interface Device {
   id: string;
   name: string;
   tokenHash: string;
   createdAt: string;
   lastSeenAt: string;
+  pushSubscription?: PushSubscriptionJSON;
 }
 
 export interface Account {
@@ -22,11 +28,13 @@ export interface PositionRow extends StoredPosition {
 
 export interface AccountStore {
   findAccountByUsername(username: string): Promise<Account | null>;
+  getAccountById(accountId: string): Promise<Account | null>;
   createAccount(username: string, passcodeHash: string): Promise<Account>;
   addDevice(accountId: string, device: Device): Promise<void>;
   removeDevice(accountId: string, deviceId: string): Promise<void>;
   findByDeviceTokenHash(tokenHash: string): Promise<{ account: Account; device: Device } | null>;
   touchDevice(accountId: string, deviceId: string): Promise<void>;
+  setDevicePushSubscription(accountId: string, deviceId: string, sub: PushSubscriptionJSON | null): Promise<void>;
   upsertPositionMerged(
     accountId: string,
     sourceUrl: string,
@@ -51,6 +59,9 @@ export class InMemoryAccountStore implements AccountStore {
     for (const a of this.accounts.values()) if (a.username === username) return a;
     return null;
   }
+  async getAccountById(accountId: string): Promise<Account | null> {
+    return this.accounts.get(accountId) ?? null;
+  }
   async createAccount(username: string, passcodeHash: string): Promise<Account> {
     const acc: Account = { id: this.id("acc"), username, passcodeHash, devices: [] };
     this.accounts.set(acc.id, acc);
@@ -73,6 +84,15 @@ export class InMemoryAccountStore implements AccountStore {
   async touchDevice(accountId: string, deviceId: string): Promise<void> {
     const d = this.accounts.get(accountId)?.devices.find((x) => x.id === deviceId);
     if (d) d.lastSeenAt = this.now();
+  }
+  async setDevicePushSubscription(accountId: string, deviceId: string, sub: PushSubscriptionJSON | null): Promise<void> {
+    const d = this.accounts.get(accountId)?.devices.find((x) => x.id === deviceId);
+    if (!d) return;
+    if (sub !== null) {
+      d.pushSubscription = sub;
+    } else {
+      delete d.pushSubscription;
+    }
   }
   async upsertPositionMerged(
     accountId: string,
