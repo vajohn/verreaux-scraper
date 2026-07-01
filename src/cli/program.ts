@@ -416,7 +416,9 @@ export async function runCli(argv: string[]): Promise<number> {
       );
     }
 
-    exitCode = result.exitCode;
+    // A rate-limit salvage still wrote output.zip, so the exit-5 signal now
+    // comes from the result rather than a thrown RateLimitExhaustedError.
+    exitCode = result.rateLimited ? ExitCode.PARTIAL_RESUME_POSSIBLE : result.exitCode;
   } catch (err: unknown) {
     const isForcedAbort =
       err instanceof Error &&

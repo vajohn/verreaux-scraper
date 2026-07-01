@@ -35,11 +35,14 @@ vi.mock("../src/packaging/staging.js", async (importOriginal) => {
   };
 });
 
+const packagerBuildOpts: Array<{ outPath: string; seriesTitle: string; allowPartial?: boolean }> = [];
+
 vi.mock("../src/packaging/packager.js", () => {
   return {
     Packager: class MockPackager {
       constructor(private bus: EventBus) {}
-      async build(_staging: unknown, opts: { outPath: string; seriesTitle: string }) {
+      async build(_staging: unknown, opts: { outPath: string; seriesTitle: string; allowPartial?: boolean }) {
+        packagerBuildOpts.push(opts);
         return {
           path: `${opts.outPath}.zip`,
           byteLength: 1024,
@@ -54,6 +57,7 @@ vi.mock("../src/packaging/packager.js", () => {
 
 import { adapterRegistry } from "../src/adapters/index.js";
 import { runChapter } from "../src/core/chapterRunner.js";
+import { RateLimitExhaustedError } from "../src/core/imageRunner.js";
 
 const mockAdapterRegistry = adapterRegistry as { matchUrl: ReturnType<typeof vi.fn>; byId: ReturnType<typeof vi.fn> };
 const mockRunChapter = runChapter as ReturnType<typeof vi.fn>;
@@ -175,6 +179,7 @@ describe("Pipeline", () => {
     mockRunChapter.mockReset();
     mockAdapterRegistry.matchUrl.mockReset();
     mockRunChapter.mockResolvedValue({ status: "completed", pageCount: 5 });
+    packagerBuildOpts.length = 0;
   });
 
   describe("happy path", () => {
@@ -194,6 +199,7 @@ describe("Pipeline", () => {
       expect(result.chaptersCompleted).toBe(3);
       expect(result.chaptersFailed).toHaveLength(0);
       expect(result.outputPath).toMatch(/\.zip$/);
+      expect(result.rateLimited).toBe(false);
     });
 
     it("fires run.init event", async () => {
@@ -336,6 +342,49 @@ describe("Pipeline", () => {
       expect(result.outputPath).toMatch(/\.zip$/);
       expect(result.chaptersFailed).toHaveLength(1);
       expect(result.chaptersCompleted).toBe(2);
+    });
+  });
+
+  describe("rate limit with progress", () => {
+    it("packages already-downloaded chapters with allowPartial:true and flags rateLimited", async () => {
+      const adapter = makeAdapter();
+      mockAdapterRegistry.matchUrl.mockReturnValue(adapter);
+
+      // First chapter stages successfully, second throws a rate-limit error
+      // that escapes runChapter (surfacing through the pool's unexpected path).
+      mockRunChapter.mockResolvedValueOnce({ status: "completed", pageCount: 5 });
+      mockRunChapter.mockRejectedValueOnce(new RateLimitExhaustedError("img.example.com"));
+      mockRunChapter.mockResolvedValue({ status: "completed", pageCount: 5 });
+
+      const deps = makeDeps();
+      const pipeline = new Pipeline(deps);
+      // allowPartialZip is false — the rate-limit path must still package.
+      const result = await pipeline.run(
+        makeConfig({ from: 1, to: 3, allowPartialZip: false }),
+        new AbortController().signal,
+      );
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.outputPath).toMatch(/\.zip$/);
+      expect(result.exitCode).toBe(ExitCode.PARTIAL_RESUME_POSSIBLE);
+      expect(packagerBuildOpts).toHaveLength(1);
+      expect(packagerBuildOpts[0]?.allowPartial).toBe(true);
+    });
+
+    it("rethrows the rate-limit error when zero chapters were staged", async () => {
+      const adapter = makeAdapter();
+      mockAdapterRegistry.matchUrl.mockReturnValue(adapter);
+
+      // The very first chapter throws — nothing has been staged.
+      mockRunChapter.mockRejectedValue(new RateLimitExhaustedError("img.example.com"));
+
+      const deps = makeDeps();
+      const pipeline = new Pipeline(deps);
+
+      await expect(
+        pipeline.run(makeConfig({ from: 1, to: 3, concurrency: 1 }), new AbortController().signal),
+      ).rejects.toBeInstanceOf(RateLimitExhaustedError);
+      expect(packagerBuildOpts).toHaveLength(0);
     });
   });
 

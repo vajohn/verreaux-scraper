@@ -17,6 +17,7 @@ import { adapterRegistry } from "../adapters/index.js";
 import type { SourceAdapter, AdapterContext } from "./types.js";
 import { selectChapters, EmptyRangeError, NoChaptersInRangeError } from "./selectRange.js";
 import { runChapter, type ChapterFailure } from "./chapterRunner.js";
+import { RateLimitExhaustedError } from "./imageRunner.js";
 
 export interface PipelineResult {
   runId: string;
@@ -27,6 +28,9 @@ export interface PipelineResult {
   chaptersFailed: ChapterFailure[];
   durationMs: number;
   exitCode: ExitCode;
+  /** True when the run stopped early on a source rate limit but still packaged
+   *  the chapters downloaded so far. The zip exists and the run is resumable. */
+  rateLimited: boolean;
 }
 
 export interface PipelineDeps {
@@ -134,6 +138,7 @@ export class Pipeline {
         chaptersCompleted: 0,
         chaptersFailed: [],
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.SOURCE_NOT_FOUND,
       };
     }
@@ -172,6 +177,7 @@ export class Pipeline {
         chaptersCompleted: 0,
         chaptersFailed: [],
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.SOURCE_NOT_FOUND,
       };
     }
@@ -227,6 +233,7 @@ export class Pipeline {
         chaptersCompleted: 0,
         chaptersFailed: [],
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.GENERIC,
       };
     }
@@ -283,6 +290,7 @@ export class Pipeline {
         chaptersCompleted: 0,
         chaptersFailed: [],
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.CONFIG_ERROR,
       };
     }
@@ -327,6 +335,7 @@ export class Pipeline {
         chaptersCompleted: 0,
         chaptersFailed: [],
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.SUCCESS,
       };
     }
@@ -426,8 +435,23 @@ export class Pipeline {
       }
     }
 
+    // A source rate-limit surfaces here as an unexpected throw. Rather than
+    // stranding the work, salvage: if anything has already been staged, fall
+    // through to packaging and flag the run partial/resumable. With nothing
+    // staged there is nothing to package, so keep the old rethrow behavior.
+    let rateLimited = false;
     if (unexpectedErrors.length > 0) {
-      throw unexpectedErrors[0];
+      const firstErr = unexpectedErrors[0];
+      if (firstErr instanceof RateLimitExhaustedError && chaptersCompleted > 0) {
+        rateLimited = true;
+        store.runs.update(runId, { status: "RATE_LIMITED" });
+        eventBus.emit("run.partial_halt", {
+          reason: firstErr.message,
+          lastChapter: selectedChapters[selectedChapters.length - 1]?.number ?? 0,
+        });
+      } else {
+        throw firstErr;
+      }
     }
 
     if (signal.aborted) {
@@ -448,13 +472,14 @@ export class Pipeline {
         chaptersCompleted,
         chaptersFailed,
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.INT_SIGINT,
       };
     }
 
     const hasFailures = chaptersFailed.length > 0;
 
-    if (hasFailures && !config.allowPartialZip) {
+    if (hasFailures && !config.allowPartialZip && !rateLimited) {
       store.runs.update(runId, {
         status: "PARTIAL_HALT",
         exitCode: ExitCode.PARTIAL_RESUME_POSSIBLE,
@@ -471,6 +496,7 @@ export class Pipeline {
         chaptersCompleted,
         chaptersFailed,
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.PARTIAL_RESUME_POSSIBLE,
       };
     }
@@ -486,7 +512,9 @@ export class Pipeline {
       zipResult = await packager.build(staging, {
         outPath,
         seriesTitle: resolvedSeries.seriesTitle,
-        allowPartial: config.allowPartialZip,
+        // On a rate-limit salvage some chapters/pages are necessarily
+        // incomplete; force partial packaging so the zip still builds.
+        allowPartial: config.allowPartialZip || rateLimited,
         manifest: buildManifest({
           sourceUrl: config.seriesUrl,
           seriesTitle: resolvedSeries.seriesTitle,
@@ -510,16 +538,24 @@ export class Pipeline {
         chaptersCompleted,
         chaptersFailed,
         durationMs: Date.now() - startTime,
+        rateLimited: false,
         exitCode: ExitCode.IO_ERROR,
       };
     }
 
     store.runs.update(runId, { zipPath: zipResult.path });
 
+    // A rate-limited salvage is a partial, resumable success: the zip exists
+    // but the run stopped short, so it exits 5 like other partial outcomes.
+    const isPartial = hasFailures || rateLimited;
+    const finalExitCode = isPartial
+      ? ExitCode.PARTIAL_RESUME_POSSIBLE
+      : ExitCode.SUCCESS;
+
     emitPipelineState(eventBus, "DONE");
     store.runs.update(runId, {
-      status: "DONE",
-      exitCode: hasFailures ? ExitCode.PARTIAL_RESUME_POSSIBLE : ExitCode.SUCCESS,
+      status: rateLimited ? "DONE_PARTIAL" : "DONE",
+      exitCode: finalExitCode,
       finishedAt: new Date().toISOString(),
       validated: true,
     });
@@ -529,18 +565,19 @@ export class Pipeline {
       chapterCount: chaptersCompleted,
       bytes: zipResult.byteLength,
       elapsedMs: Date.now() - startTime,
-      exitCode: hasFailures ? ExitCode.PARTIAL_RESUME_POSSIBLE : ExitCode.SUCCESS,
+      exitCode: finalExitCode,
     });
 
     return {
       runId,
-      status: hasFailures ? "partial" : "completed",
+      status: isPartial ? "partial" : "completed",
       outputPath: zipResult.path,
       chaptersAttempted: selectedChapters.length,
       chaptersCompleted,
       chaptersFailed,
       durationMs: Date.now() - startTime,
-      exitCode: hasFailures ? ExitCode.PARTIAL_RESUME_POSSIBLE : ExitCode.SUCCESS,
+      rateLimited,
+      exitCode: finalExitCode,
     };
   }
 }
