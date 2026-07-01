@@ -281,7 +281,7 @@ export interface SourceAdapter {
   // Sets bypass cookies (safe_browse=0, wpmanga-adult-confirmed=1, etc.) without prompting.
   dismissNsfwSplash(ctx: AdapterContext, url: string): Promise<void>;
 
-  liveDomain(): string;
+  liveDomain?(): string;
 
   /** Optional: list scanlation groups for a series.
    *  Adapters that don't have group selection (e.g. arenascan, asurascans)

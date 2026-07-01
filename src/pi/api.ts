@@ -218,5 +218,11 @@ export async function handleApiRequest(
     }
   }
 
+  if (req.method === "GET" && path === "/adapters") {
+    const { listAdapters } = await import("./searchService.js");
+    const { adapterRegistry } = await import("../adapters/index.js");
+    return json(res, 200, { adapters: listAdapters(adapterRegistry) });
+  }
+
   json(res, 404, { error: "not found" });
 }
